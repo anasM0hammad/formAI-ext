@@ -29,6 +29,30 @@ body {
   color: #e4e4e7;
 }
 
+/* Toastify Container */
+
+.Toastify__toast--success {
+  background: #1f2d24;
+  color: #86efac;
+  border-bottom: 1px solid #2d3d32;
+}
+
+.Toastify__toast--error {
+  background: #2d1f1f;
+  color: #fca5a5;
+  border-bottom: 1px solid #3d2424;
+}
+
+.Toastify__toast-container {
+  /* Styles for the container of all toasts */
+  height: 30px;
+}
+
+:root {
+  --toastify-toast-width: 200px; /* Adjust as needed */
+  --toastify-toast-min-height: 40px; /* Adjust as needed */
+}
+
 /* Notification Bar */
 .notification {
   display: flex;

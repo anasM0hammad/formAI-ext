@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { ToastContainer, toast } from 'react-toastify';
+import { fetchModelList } from './utils';
+
 const MAIN_TAB = 'General';
 const CONFIG = 'Settings';
 
@@ -20,6 +23,8 @@ type NotificationProp = {
   message: string,
   type?: 'success' | 'error' | 'warning',
 }
+
+type Providers = `${typeof OLLAMA}` | `${typeof GEMENI}` | `${typeof OPENAI}` | ``;
 
 type OptionValues = `${typeof AUTO_FILL}` | `${typeof SMART_DETECT}` | `${typeof AUTO_SUBMIT}`;
 
@@ -60,10 +65,11 @@ function Popup() {
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
   const [notificationId, setNotificationId] = useState<number | undefined>(undefined);
   const [model, setModel] = useState<string>('');
-  const [provider, setProvider] = useState<string>('');
+  const [provider, setProvider] = useState<Providers>('');
   const [apiKey, setAPIKey] = useState<string>('');
-  const [url, setUrl] = useState<string>('');
+  const [url, setUrl] = useState<string>('http://localhost:11434/v1');
   const [options, setOptions] = useState<Options>({ [AUTO_FILL]: false, [SMART_DETECT]: false, [AUTO_SUBMIT]: false});
+  const [modelList, setModelList] = useState<string[]>([]);
 
   useEffect(() => {
     // Load saved theme from storage
@@ -101,6 +107,31 @@ function Popup() {
     }
   }, []);
 
+  const fetchModels = async (provider: Providers, apiKey?: string, url?: string) => {
+    if(provider === OLLAMA){
+      if(url){
+        try{
+          const models = await fetchModelList(provider, undefined, url);
+          setModelList(models);
+        }
+        catch(error: any){
+          toast.error(error.message);
+        }
+      }
+    }
+    else if(provider){
+      if(apiKey){
+         try{
+          const models = await fetchModelList(provider, apiKey);
+          setModelList(models);
+        }
+        catch(error: any){
+          toast.error(error.message);
+        }
+      }
+    }
+  }
+
   const toggleTheme = () => {
     const newTheme = theme === 'light' ? 'dark' : 'light'
     setTheme(newTheme)
@@ -125,7 +156,9 @@ function Popup() {
   }
 
   const selectProvider = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    setProvider(event.target.value);
+    setProvider(event.target.value as Providers);
+    setAPIKey('');
+    fetchModels(event.target.value as Providers, '', url);
   }
 
   const selectModel = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -134,10 +167,12 @@ function Popup() {
 
   const selectKey = (event: React.ChangeEvent<HTMLInputElement>) => {
     setAPIKey(event.target.value);
+    fetchModels(provider, event.target.value, url);
   }
 
   const selectUrl = (event: React.ChangeEvent<HTMLInputElement>) => {
     setUrl(event.target.value);
+    fetchModels(provider, apiKey, event.target.value);
   }
 
   const toggleOptions = (title: OptionValues, event: React.ChangeEvent<HTMLInputElement>) => {
@@ -145,6 +180,23 @@ function Popup() {
      newOpt[title] = event.target.checked;
      chrome.storage.sync.set({options: newOpt});
      setOptions(newOpt);
+  }
+
+  const onFillForm = () => {
+    if(!provider){
+      toast.error('Please select the provider');
+      return;
+    }
+
+    if(!model){
+      toast.error('Please select the model');
+      return;
+    }
+
+    if(provider !== OLLAMA && !apiKey){
+      toast.error('API key is not set');
+      return;
+    }
   }
 
   return (
@@ -276,7 +328,7 @@ function Popup() {
                 </div>
               </div>
               <div className="form-group">
-                <button className='button' onClick={onSaveConfig}>Fill Form</button>
+                <button className='button' onClick={onFillForm}>Fill Form</button>
               </div>
             </>
           )}
@@ -291,10 +343,6 @@ function Popup() {
                 <option value={OLLAMA}>{OLLAMA}</option>
               </select>
             </div>
-            <div className="form-group">
-              <label>Model Name</label>
-              <input className='form-control' onChange={selectModel} value={model}/>
-            </div>
             { provider !== OLLAMA && (
               <div className="form-group">
                 <label>API Key</label>
@@ -307,6 +355,14 @@ function Popup() {
               <input className='form-control' onChange={selectUrl} value={url}/>
             </div>
             )}
+            { (modelList.length !== 0) && <div className="form-group">
+                <label>Model Name</label>
+                <input className='form-control' onChange={selectModel} value={model} list='modelList'/>
+                <datalist id="modelList">
+                  { modelList.map((model) => <option value={model}>{model}</option>) } 
+                </datalist>
+              </div>
+            }
             <div className='disclaimer'>
               <p>The API key will be stored locally and not be seen by FormAI</p>
             </div>
@@ -315,7 +371,7 @@ function Popup() {
             </div>
           </>
         )}
-        
+        <ToastContainer position='top-right' autoClose={3000} pauseOnFocusLoss={false} pauseOnHover={false} />
       </div>
 
     </div>
