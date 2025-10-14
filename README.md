@@ -1,6 +1,6 @@
-# Chrome Extension
+# FormAI Extension
 
-A Chrome extension built with React, TypeScript, and Vite.
+A Chrome extension to fill the job application form using AI without even you touching the keyboard.
 
 ## Project Structure
 
@@ -64,16 +64,4 @@ npm run dev
 npm run build
 ```
 
-## Features
-
-- **Popup**: Opens when clicking the extension icon in the toolbar
-- **Options Page**: Accessible via right-click on extension icon > Options
-- **Content Script**: Runs on web pages (configured for all URLs by default)
-- **Background Service Worker**: Handles extension lifecycle and communication
-
-## Customization
-
-- Update `public/manifest.json` to add permissions or modify settings
-- Add your own icons to `public/icons/`
-- Modify content script URL matching in manifest.json `content_scripts.matches`
 
