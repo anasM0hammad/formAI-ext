@@ -70,6 +70,8 @@ function Popup() {
   const [url, setUrl] = useState<string>('http://localhost:11434/v1');
   const [options, setOptions] = useState<Options>({ [AUTO_FILL]: false, [SMART_DETECT]: false, [AUTO_SUBMIT]: false});
   const [modelList, setModelList] = useState<string[]>([]);
+  const [notification, setNotification] = useState<string>('');
+  const [notificationType, setNotificationType] = useState<'success' | 'error' | 'warning'>('success');
 
   useEffect(() => {
     // Load saved theme from storage
@@ -80,13 +82,28 @@ function Popup() {
       }
     });
 
-    chrome.storage.sync.get(['provider', 'apiKey', 'model', 'url', 'options'], (result) => {
+    chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'options'], async (result) => {
       if(result.provider){
         setProvider(result.provider);
       }
 
       if(result.apiKey){
-        setAPIKey(result.apiKey);
+        try{
+          const response = await chrome.runtime.sendMessage({
+            type: 'decrypt',
+            data: result.apiKey
+          });
+
+          if(response.status){
+            setAPIKey(response.decrypted);
+          }
+        }
+        catch(error: any){
+          const id = setTimeout(() => {
+            resetNotification()
+          }, 2000);
+          createNotification(`API key can't be fetched` + error.message, id, 'error');
+        }
       }
 
       if(result.model){
@@ -96,7 +113,7 @@ function Popup() {
       if(result.url){
         setUrl(result.url);
       }
-      console.log(result);
+
       if(result.options){
         setOptions(result.options);
       }
@@ -107,6 +124,18 @@ function Popup() {
     }
   }, []);
 
+  const resetNotification = () => {
+    setNotificationId(undefined);
+    setNotification('');
+    setNotificationType('success');
+  }
+
+  const createNotification = (message: string, id: number, type: 'success' | 'error' | 'warning' = 'success') => {
+    setNotificationId(id);
+    setNotification(message);
+    setNotificationType(type);
+  }
+
   const fetchModels = async (provider: Providers, apiKey?: string, url?: string) => {
     if(provider === OLLAMA){
       if(url){
@@ -115,6 +144,7 @@ function Popup() {
           setModelList(models);
         }
         catch(error: any){
+          setModelList([]);
           toast.error(error.message);
         }
       }
@@ -126,6 +156,7 @@ function Popup() {
           setModelList(models);
         }
         catch(error: any){
+          setModelList([]);
           toast.error(error.message);
         }
       }
@@ -139,20 +170,50 @@ function Popup() {
     chrome.storage.sync.set({ theme: newTheme })
   };
 
-  const onSaveConfig = (event: React.MouseEvent<HTMLButtonElement>) => {
+  const onSaveConfig = async (event: React.MouseEvent<HTMLButtonElement>) => {
     clearTimeout(notificationId);
 
-    chrome.storage.sync.set({
-      provider,
-      apiKey,
-      model,
-      url
-    });
+    if(!provider || ((provider === OLLAMA && !url) || (provider !== OLLAMA && !apiKey))){
+      const id = setTimeout(() => {
+        resetNotification();
+      }, 2000);
+
+      createNotification('Parameters are invalid', id, 'error');
+      return;
+    }
+
+    try{
+      const response = await chrome.runtime.sendMessage({
+        type: 'encrypt',
+        data: apiKey,
+      });
     
-    const id = setTimeout(() => {
-      setNotificationId(undefined);
-    }, 2000);
-    setNotificationId(id);
+      if(!response.status){
+        const id = setTimeout(() => {
+          resetNotification();
+        }, 2000);
+        createNotification('Configuration failed to save ' + response.error, id, 'error');
+        return;
+      }
+
+      chrome.storage.local.set({
+        provider,
+        apiKey: response.encrypted,
+        model,
+        url
+      });
+    
+      const id = setTimeout(() => {
+        resetNotification();
+      }, 2000);
+      createNotification('Configuration saved succesfully', id);
+    }
+    catch(error: any){
+      const id = setTimeout(() => {
+         resetNotification()
+      }, 2000);
+      createNotification('Saving failed with error ' + error.message, id, 'error');
+    }
   }
 
   const selectProvider = (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -202,7 +263,7 @@ function Popup() {
   return (
     <div className={`popup-container ${theme}`}>
       {/* Notification Bar */}
-      { notificationId && <Notification message='Configuration saved successfully!' type='success'/> }
+      { notificationId && notification && <Notification message={notification} type={notificationType} /> }
       <div className="header">
         <h1>Welcome to FormAI</h1>
         <button className="theme-toggle" onClick={toggleTheme} title="Toggle theme">

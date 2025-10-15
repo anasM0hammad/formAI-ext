@@ -26,7 +26,7 @@ export const fetchModelList = async (provider: 'OpenAI' | 'Gemini' | 'Ollama', k
     try{
         const models = await openai.models.list();
         if(models.data && models.data.length){
-            return models.data.map((model) => model.id);
+            return models.data.map((model) => model.id.split('/').length > 1 ? model.id.split('/')[1] : model.id);
         }
         return [];
     }

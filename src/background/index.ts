@@ -1,13 +1,22 @@
+import { decryption, encryption } from "../utils";
+
 // Background service worker
 console.log('Background service worker started')
 
 // Listen for extension installation
-chrome.runtime.onInstalled.addListener((details) => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   console.log('Extension installed:', details.reason)
   
   if (details.reason === 'install') {
     // Set default settings
-    chrome.storage.sync.set({ initialized: true })
+    chrome.storage.sync.set({ initialized: true });
+
+    // Generating Unique value
+    const value = crypto.getRandomValues(new Uint8Array(32));
+    await chrome.storage.local.set({
+      installationValue: Array.from(value),
+      installedAt: new Date().toISOString()
+    });
   }
 })
 
@@ -17,11 +26,19 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   
   // Handle different message types
   switch (request.type) {
-    case 'example':
-      sendResponse({ status: 'success' })
-      break
+    case 'encrypt':
+      const data = request.data;
+      encryption(data).then((encrypted) => sendResponse({ status: true, encrypted}))
+      .catch((err) => sendResponse({ status: false, error: err.message }));
+      break;
+    
+    case 'decrypt':
+      decryption(request.data).then((decrypted) => sendResponse({ status: true, decrypted}))
+      .catch((err) => sendResponse({ status: false, error: err.message }));
+      break;
+      
     default:
-      sendResponse({ status: 'unknown message type' })
+      sendResponse({ status: false, error: 'unknown message type' })
   }
   
   return true
