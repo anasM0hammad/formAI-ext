@@ -3,6 +3,7 @@ import { ToastContainer, toast } from 'react-toastify';
 import { fetchModelList } from './utils';
 
 const MAIN_TAB = 'General';
+const DATA_TAB = 'Data';
 const CONFIG = 'Settings';
 
 const OLLAMA = 'Ollama';
@@ -295,6 +296,12 @@ function Popup() {
          {MAIN_TAB}
         </button>
         <button
+          className={`tab ${activeTab === DATA_TAB ? 'active' : ''}`}
+          onClick={() => setActiveTab(DATA_TAB)}
+        >
+         {DATA_TAB}
+        </button>
+        <button
           className={`tab ${activeTab === CONFIG ? 'active' : ''}`}
           onClick={() => setActiveTab(CONFIG)}
         >
@@ -393,6 +400,23 @@ function Popup() {
               </div>
             </>
           )}
+          {activeTab === DATA_TAB && (
+             <>
+              <div className="form-group">
+                <label>Enter info about youself</label>
+                <textarea className='form-control'></textarea>
+              </div>
+              <h2 className="section-title">About the information</h2>
+              <div className='disclaimer'>
+                <p>* All information you provide will be stored locally on your device and used to autofill job applications.</p>
+                <p>* Add as much detail to make the agent work better. More information can be added later as well. </p>
+                <p>* Need a fresh start? Use the Reset button to clear.</p>
+              </div>
+              <div className="form-group">
+                <button className='button'>Add</button>
+              </div>
+            </>
+          )}
           {activeTab === CONFIG && (
           <>
             <div className="form-group">
@@ -431,7 +455,7 @@ function Popup() {
               <button className='button' onClick={onSaveConfig}>Save Config</button>
             </div>
           </>
-        )}
+          )}
         <ToastContainer position='top-right' autoClose={3000} pauseOnFocusLoss={false} pauseOnHover={false} />
       </div>
 
