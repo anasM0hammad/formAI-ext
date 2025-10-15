@@ -76,9 +76,13 @@ function Popup() {
   useEffect(() => {
     // Load saved theme from storage
 
-    chrome.storage.sync.get(['theme'], (result) => {
+    chrome.storage.sync.get(['theme', 'options'], (result) => {
       if (result.theme) {
         setTheme(result.theme)
+      }
+
+      if(result.options){
+        setOptions(result.options);
       }
     });
 
@@ -112,10 +116,6 @@ function Popup() {
 
       if(result.url){
         setUrl(result.url);
-      }
-
-      if(result.options){
-        setOptions(result.options);
       }
     });
 
@@ -416,7 +416,7 @@ function Popup() {
               <input className='form-control' onChange={selectUrl} value={url}/>
             </div>
             )}
-            { (modelList.length !== 0) && <div className="form-group">
+            { (modelList.length !== 0 || model) && <div className="form-group">
                 <label>Model Name</label>
                 <input className='form-control' onChange={selectModel} value={model} list='modelList'/>
                 <datalist id="modelList">
