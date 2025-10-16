@@ -303,15 +303,29 @@ h1 {
 
 /* Form Styles */
 .form-group {
-  margin-bottom: 20px;
+  margin-bottom: 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
 .form-group label {
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.2px;
+  transition: color 0.3s ease;
+}
+
+.form-group-data {
+  margin-bottom: 25px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-group-data label {
+  font-size: 16px;
+  font-weight: 600;
   letter-spacing: 0.2px;
   transition: color 0.3s ease;
 }
@@ -326,10 +340,10 @@ h1 {
 
 .form-control {
   width: 100%;
-  padding: 12px 16px;
+  padding: 8px 12px;
   border-radius: 8px;
-  border: 2px solid;
-  font-size: 14px;
+  border: 1px solid;
+  font-size: 12px;
   font-family: inherit;
   outline: none;
   transition: all 0.3s ease;
@@ -382,6 +396,41 @@ h1 {
 
 .disclaimer {
   margin: 0 5px 15px 5px;
+}
+
+/* Info points list in Data tab */
+.info-points {
+  margin: 0 10px 16px 24px;
+  padding: 0;
+  list-style: none;
+}
+
+.info-points li {
+  position: relative;
+  margin: 0 0 5px 0;
+  padding-left: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.info-points li::before {
+  content: '';
+  position: absolute;
+  left: -14px;
+  top: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: linear-gradient(135deg, #667eea, #a78bfa);
+  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.15);
+}
+
+.popup-container.light .info-points li {
+  color: #4b5563;
+}
+
+.popup-container.dark .info-points li {
+  color: #d1d5db;
 }
 
 /* General Tab Styles */
@@ -662,6 +711,57 @@ h1 {
 
 .button:active {
   transform: translateY(0);
+  opacity: 0.9;
+}
+
+/* Data tab inline Add button */
+.button-inline {
+  display: inline-block;
+  width: auto;
+  background-color: #a78bfa;
+  color: white;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: 'Poppins', sans-serif;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.button-inline:hover {
+  background-color: #9333ea;
+}
+
+.button-inline:active {
+  transform: translateY(0);
+  opacity: 0.9;
+}
+
+/* Data tab bottom Reset button */
+.button-reset {
+  display: block;
+  width: calc(100% - 40px);
+  background: transparent;
+  color: #ef4444;
+  padding: 8px 12px;
+  border: 1px solid #ef4444;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: 'Poppins', sans-serif;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  right: 20px;
+}
+
+.button-reset:hover {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.button-reset:active {
   opacity: 0.9;
 }
 

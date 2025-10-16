@@ -8,7 +8,7 @@ const CONFIG = 'Settings';
 
 const OLLAMA = 'Ollama';
 const OPENAI = 'OpenAI';
-const GEMENI = 'Gemini';
+const GEMINI = 'Gemini';
 
 const AUTO_FILL = 'autoFill';
 const SMART_DETECT = 'smartDetect';
@@ -25,7 +25,7 @@ type NotificationProp = {
   type?: 'success' | 'error' | 'warning',
 }
 
-type Providers = `${typeof OLLAMA}` | `${typeof GEMENI}` | `${typeof OPENAI}` | ``;
+type Providers = `${typeof OLLAMA}` | `${typeof GEMINI}` | `${typeof OPENAI}` | ``;
 
 type OptionValues = `${typeof AUTO_FILL}` | `${typeof SMART_DETECT}` | `${typeof AUTO_SUBMIT}`;
 
@@ -68,6 +68,7 @@ function Popup() {
   const [model, setModel] = useState<string>('');
   const [provider, setProvider] = useState<Providers>('');
   const [apiKey, setAPIKey] = useState<string>('');
+  const [agentQLKey, setAgentQLKey] = useState<string>('');
   const [url, setUrl] = useState<string>('http://localhost:11434/v1');
   const [options, setOptions] = useState<Options>({ [AUTO_FILL]: false, [SMART_DETECT]: false, [AUTO_SUBMIT]: false});
   const [modelList, setModelList] = useState<string[]>([]);
@@ -87,7 +88,7 @@ function Popup() {
       }
     });
 
-    chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'options'], async (result) => {
+    chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'agentQLKey', 'options'], async (result) => {
       if(result.provider){
         setProvider(result.provider);
       }
@@ -108,6 +109,25 @@ function Popup() {
             resetNotification()
           }, 2000);
           createNotification(`API key can't be fetched` + error.message, id, 'error');
+        }
+      }
+
+      if(result.agentQLKey){
+        try{
+          const response = await chrome.runtime.sendMessage({
+            type: 'decrypt',
+            data: result.agentQLKey
+          });
+
+          if(response.status){
+            setAgentQLKey(response.decrypted);
+          }
+        }
+        catch(error: any){
+          const id = setTimeout(() => {
+            resetNotification()
+          }, 2000);
+          createNotification(`AgentQL API key can't be fetched` + error.message, id, 'error');
         }
       }
 
@@ -197,9 +217,23 @@ function Popup() {
         return;
       }
 
+      const responseAgentQL = await chrome.runtime.sendMessage({
+        type: 'encrypt',
+        data: agentQLKey,
+      });
+    
+      if(!responseAgentQL.status){
+        const id = setTimeout(() => {
+          resetNotification();
+        }, 2000);
+        createNotification('Configuration failed to save ' + response.error, id, 'error');
+        return;
+      }
+
       chrome.storage.local.set({
         provider,
         apiKey: response.encrypted,
+        agentQLKey: responseAgentQL.encrypted,
         model,
         url
       });
@@ -237,6 +271,10 @@ function Popup() {
     fetchModels(provider, apiKey, event.target.value);
   }
 
+  const selectAgentQLKey = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setAgentQLKey(event.target.value);
+  }
+
   const toggleOptions = (title: OptionValues, event: React.ChangeEvent<HTMLInputElement>) => {
      const newOpt = {...options};
      newOpt[title] = event.target.checked;
@@ -252,6 +290,11 @@ function Popup() {
 
     if(!model){
       toast.error('Please select the model');
+      return;
+    }
+
+    if(!agentQLKey){
+      toast.error('Please add AgentQL API Key');
       return;
     }
 
@@ -325,7 +368,7 @@ function Popup() {
                             <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" fill="currentColor"/>
                           </svg>
                         )}
-                        {provider === GEMENI && (
+                        {provider === GEMINI && (
                           <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
                             <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                           </svg>
@@ -402,19 +445,20 @@ function Popup() {
           )}
           {activeTab === DATA_TAB && (
              <>
+              <div className="form-group-data">
+                <label>Enter info about yourself</label>
+                <textarea className='form-control' rows={5}></textarea>
+              </div>
               <div className="form-group">
-                <label>Enter info about youself</label>
-                <textarea className='form-control'></textarea>
+                <button className='button-inline'>Add</button>
               </div>
               <h2 className="section-title">About the information</h2>
-              <div className='disclaimer'>
-                <p>* All information you provide will be stored locally on your device and used to autofill job applications.</p>
-                <p>* Add as much detail to make the agent work better. More information can be added later as well. </p>
-                <p>* Need a fresh start? Use the Reset button to clear.</p>
-              </div>
-              <div className="form-group">
-                <button className='button'>Add</button>
-              </div>
+              <ul className='info-points'>
+                <li>All information is stored locally on your device.</li>
+                <li>Details help the agent fill forms more accurately.</li>
+                <li>You can update or reset this anytime.</li>
+              </ul>
+              <button className='button-reset'>Reset</button>
             </>
           )}
           {activeTab === CONFIG && (
@@ -424,9 +468,13 @@ function Popup() {
               <select className='form-control' onChange={selectProvider} value={provider}>
                 <option value="">Select</option>
                 <option value={OPENAI}>{OPENAI}</option>
-                <option value={GEMENI}>{GEMENI}</option>
+                <option value={GEMINI}>{GEMINI}</option>
                 <option value={OLLAMA}>{OLLAMA}</option>
               </select>
+            </div>
+            <div className="form-group">
+              <label>AgentQL Key</label>
+              <input type="password" className='form-control' onChange={selectAgentQLKey} value={agentQLKey}  />
             </div>
             { provider !== OLLAMA && (
               <div className="form-group">
@@ -441,7 +489,7 @@ function Popup() {
             </div>
             )}
             { (modelList.length !== 0 || model) && <div className="form-group">
-                <label>Model Name</label>
+                <label>LLM Model</label>
                 <input className='form-control' onChange={selectModel} value={model} list='modelList'/>
                 <datalist id="modelList">
                   { modelList.map((model) => <option value={model}>{model}</option>) } 
@@ -449,7 +497,7 @@ function Popup() {
               </div>
             }
             <div className='disclaimer'>
-              <p>The API key will be stored locally and not be seen by FormAI</p>
+              <p>The API keys will be stored locally and not be seen by FormAI</p>
             </div>
             <div className="form-group">
               <button className='button' onClick={onSaveConfig}>Save Config</button>
