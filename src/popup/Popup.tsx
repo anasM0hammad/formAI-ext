@@ -107,7 +107,7 @@ function Popup() {
         catch(error: any){
           const id = setTimeout(() => {
             resetNotification()
-          }, 2000);
+          }, 2000) as unknown as number;
           createNotification(`API key can't be fetched` + error.message, id, 'error');
         }
       }
@@ -126,7 +126,7 @@ function Popup() {
         catch(error: any){
           const id = setTimeout(() => {
             resetNotification()
-          }, 2000);
+          }, 2000) as unknown as number;
           createNotification(`AgentQL API key can't be fetched` + error.message, id, 'error');
         }
       }
@@ -197,7 +197,7 @@ function Popup() {
     if(!provider || ((provider === OLLAMA && !url) || (provider !== OLLAMA && !apiKey))){
       const id = setTimeout(() => {
         resetNotification();
-      }, 2000);
+      }, 2000) as unknown as number;
 
       createNotification('Parameters are invalid', id, 'error');
       return;
@@ -212,7 +212,7 @@ function Popup() {
       if(!response.status){
         const id = setTimeout(() => {
           resetNotification();
-        }, 2000);
+        }, 2000) as unknown as number;
         createNotification('Configuration failed to save ' + response.error, id, 'error');
         return;
       }
@@ -225,7 +225,7 @@ function Popup() {
       if(!responseAgentQL.status){
         const id = setTimeout(() => {
           resetNotification();
-        }, 2000);
+        }, 2000) as unknown as number;
         createNotification('Configuration failed to save ' + response.error, id, 'error');
         return;
       }
@@ -240,13 +240,13 @@ function Popup() {
     
       const id = setTimeout(() => {
         resetNotification();
-      }, 2000);
-      createNotification('Configuration saved succesfully', id);
+      }, 2000) as unknown as number;
+      createNotification('Configuration saved successfully', id);
     }
     catch(error: any){
       const id = setTimeout(() => {
          resetNotification()
-      }, 2000);
+      }, 2000) as unknown as number;
       createNotification('Saving failed with error ' + error.message, id, 'error');
     }
   }
@@ -456,7 +456,7 @@ function Popup() {
               <ul className='info-points'>
                 <li>All information is stored locally on your device.</li>
                 <li>Details help the agent fill forms more accurately.</li>
-                <li>You can update or reset this anytime.</li>
+                <li>You can add or reset data this anytime.</li>
               </ul>
               <button className='button-reset'>Reset</button>
             </>

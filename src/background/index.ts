@@ -1,4 +1,5 @@
-import { decryption, encryption } from "../utils";
+import { decryption, encryption } from "../crypto";
+import { deleteVector, insert, query } from "../embeddings";
 
 // Background service worker
 console.log('Background service worker started')
@@ -35,6 +36,22 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     case 'decrypt':
       decryption(request.data).then((decrypted) => sendResponse({ status: true, decrypted}))
       .catch((err) => sendResponse({ status: false, error: err.message }));
+      break;
+
+    // Create and store embeddings
+    case 'store':
+      insert(request.data).then(() => sendResponse({ status: true, message: 'Data stored successfully'}))
+      .catch((err) => sendResponse({ status: false, error: err.message}));
+      break;
+
+    case 'reset':
+      deleteVector().then(() => sendResponse({ status: true, message: 'Database reset'}))
+      .catch((err) => sendResponse({ status: false, error: err.message}));
+      break;
+
+    case 'query':
+      query(request.data).then((data) => sendResponse({ status: true, data}))
+      .catch((err) => sendResponse({ status: false, error: err.message}));
       break;
       
     default:
