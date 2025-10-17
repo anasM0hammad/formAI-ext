@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ToastContainer, toast } from 'react-toastify';
 import { fetchModelList } from './utils';
+import { deleteVector, insert } from '../embeddings';
 
 const MAIN_TAB = 'General';
 const DATA_TAB = 'Data';
@@ -74,6 +75,7 @@ function Popup() {
   const [modelList, setModelList] = useState<string[]>([]);
   const [notification, setNotification] = useState<string>('');
   const [notificationType, setNotificationType] = useState<'success' | 'error' | 'warning'>('success');
+  const dataRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     // Load saved theme from storage
@@ -144,6 +146,34 @@ function Popup() {
       clearTimeout(notificationId);
     }
   }, []);
+
+  const addData = async () => {
+    const data = dataRef.current;
+
+    if(!data?.value){
+      toast.warning('Empty field');
+      return;
+    }
+
+    try{
+      await insert(data.value);
+      data.value = '';
+      toast.success(`Added successfully`);
+    }
+    catch(error: any){
+      toast.error(`Failed ${error.message}`);
+    }
+  };
+
+  const resetDatabase = async () => {
+    try{
+      await deleteVector();
+      toast.success(`Deleted successfully`);
+    }
+    catch(error: any){
+      toast.error(`Failed ${error.message}`);
+    }
+  }
 
   const resetNotification = () => {
     setNotificationId(undefined);
@@ -447,10 +477,10 @@ function Popup() {
              <>
               <div className="form-group-data">
                 <label>Enter info about yourself</label>
-                <textarea className='form-control' rows={5}></textarea>
+                <textarea className='form-control' rows={5} ref={dataRef}></textarea>
               </div>
               <div className="form-group">
-                <button className='button-inline'>Add</button>
+                <button className='button-inline' onClick={addData}>Add</button>
               </div>
               <h2 className="section-title">About the information</h2>
               <ul className='info-points'>
@@ -458,7 +488,7 @@ function Popup() {
                 <li>Details help the agent fill forms more accurately.</li>
                 <li>You can add or reset data this anytime.</li>
               </ul>
-              <button className='button-reset'>Reset</button>
+              <button className='button-reset' onClick={resetDatabase}>Reset</button>
             </>
           )}
           {activeTab === CONFIG && (

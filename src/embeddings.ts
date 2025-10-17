@@ -1,4 +1,4 @@
-import { EntityDB } from "@babycommando/entity-db"
+import { EntityDB } from "@babycommando/entity-db";
 
 const DB_NAME = 'formAI-database';
 let DB: EntityDB | null = null;
@@ -53,9 +53,10 @@ export const query = async (data: string) => {
 }
 
 export const deleteVector = async () => {
-    const deleteRequest = indexedDB.deleteDatabase(DB_NAME);
+    const deleteRequest = indexedDB.deleteDatabase('EntityDB');
 
     deleteRequest.onsuccess = function() {
+        DB = null;
         console.log('database deleted successfully');
     }
 
