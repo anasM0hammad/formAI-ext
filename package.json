@@ -21,7 +21,7 @@
   "dependencies": {
     "@babycommando/entity-db": "^1.0.11",
     "crypto": "^1.0.1",
-    "openai": "^6.3.0",
+    "openai": "^6.6.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-toastify": "^11.0.5"

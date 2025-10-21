@@ -69,9 +69,8 @@ function Popup() {
   const [model, setModel] = useState<string>('');
   const [provider, setProvider] = useState<Providers>('');
   const [apiKey, setAPIKey] = useState<string>('');
-  const [agentQLKey, setAgentQLKey] = useState<string>('');
   const [url, setUrl] = useState<string>('http://localhost:11434/v1');
-  const [options, setOptions] = useState<Options>({ [AUTO_FILL]: false, [SMART_DETECT]: false, [AUTO_SUBMIT]: false});
+  const [options, setOptions] = useState<Options>({ [AUTO_FILL]: false, [SMART_DETECT]: true, [AUTO_SUBMIT]: false});
   const [modelList, setModelList] = useState<string[]>([]);
   const [notification, setNotification] = useState<string>('');
   const [notificationType, setNotificationType] = useState<'success' | 'error' | 'warning'>('success');
@@ -111,25 +110,6 @@ function Popup() {
             resetNotification()
           }, 2000) as unknown as number;
           createNotification(`API key can't be fetched` + error.message, id, 'error');
-        }
-      }
-
-      if(result.agentQLKey){
-        try{
-          const response = await chrome.runtime.sendMessage({
-            type: 'decrypt',
-            data: result.agentQLKey
-          });
-
-          if(response.status){
-            setAgentQLKey(response.decrypted);
-          }
-        }
-        catch(error: any){
-          const id = setTimeout(() => {
-            resetNotification()
-          }, 2000) as unknown as number;
-          createNotification(`AgentQL API key can't be fetched` + error.message, id, 'error');
         }
       }
 
@@ -247,23 +227,9 @@ function Popup() {
         return;
       }
 
-      const responseAgentQL = await chrome.runtime.sendMessage({
-        type: 'encrypt',
-        data: agentQLKey,
-      });
-    
-      if(!responseAgentQL.status){
-        const id = setTimeout(() => {
-          resetNotification();
-        }, 2000) as unknown as number;
-        createNotification('Configuration failed to save ' + response.error, id, 'error');
-        return;
-      }
-
       chrome.storage.local.set({
         provider,
         apiKey: response.encrypted,
-        agentQLKey: responseAgentQL.encrypted,
         model,
         url
       });
@@ -298,11 +264,8 @@ function Popup() {
 
   const selectUrl = (event: React.ChangeEvent<HTMLInputElement>) => {
     setUrl(event.target.value);
+    setAPIKey('dummy');
     fetchModels(provider, apiKey, event.target.value);
-  }
-
-  const selectAgentQLKey = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setAgentQLKey(event.target.value);
   }
 
   const toggleOptions = (title: OptionValues, event: React.ChangeEvent<HTMLInputElement>) => {
@@ -312,7 +275,7 @@ function Popup() {
      setOptions(newOpt);
   }
 
-  const onFillForm = () => {
+  const onFillForm = async () => {
     if(!provider){
       toast.error('Please select the provider');
       return;
@@ -323,14 +286,30 @@ function Popup() {
       return;
     }
 
-    if(!agentQLKey){
-      toast.error('Please add AgentQL API Key');
-      return;
-    }
-
     if(provider !== OLLAMA && !apiKey){
       toast.error('API key is not set');
       return;
+    }
+
+    try{
+      let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if(tab.id === undefined){
+        toast.error('No Tab is found');
+        return;
+      };
+
+      let baseURL = '';
+      if(provider === GEMINI){
+        baseURL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
+      }
+      else if(provider === OLLAMA){
+        baseURL = url;
+      }
+      const response = await chrome.tabs.sendMessage(tab.id, { type: 'fill', data: { apiKey, url: baseURL, model }});
+
+    }
+    catch(error: any){
+      console.log(error.message);
     }
   }
 
@@ -501,10 +480,6 @@ function Popup() {
                 <option value={GEMINI}>{GEMINI}</option>
                 <option value={OLLAMA}>{OLLAMA}</option>
               </select>
-            </div>
-            <div className="form-group">
-              <label>AgentQL Key</label>
-              <input type="password" className='form-control' onChange={selectAgentQLKey} value={agentQLKey}  />
             </div>
             { provider !== OLLAMA && (
               <div className="form-group">

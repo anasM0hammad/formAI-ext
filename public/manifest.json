@@ -31,8 +31,11 @@
   },
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "scripting"
   ],
-  "host_permissions": []
+  "host_permissions": [
+    "http://localhost:11434/*"
+  ]
 }
 

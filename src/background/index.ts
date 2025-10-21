@@ -1,7 +1,7 @@
 import { decryption, encryption } from "../crypto";
 
 // Background service worker
-console.log('Background service worker started')
+console.log('Background service worker started');
 
 // Listen for extension installation
 chrome.runtime.onInstalled.addListener(async (details) => {
@@ -37,6 +37,9 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       .catch((err) => sendResponse({ status: false, error: err.message }));
       break;
 
+    case 'fetchFields':
+      break;
+
     // case 'store':
     //   console.log('in store');
     //   insert(request.data).then(() => sendResponse({ status: true, message: 'Data stored successfully'}))
@@ -58,7 +61,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   }
   
   return true
-})
+});
 
 // Example: Listen for tab updates
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
