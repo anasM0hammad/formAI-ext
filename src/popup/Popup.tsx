@@ -75,6 +75,7 @@ function Popup() {
   const [notification, setNotification] = useState<string>('');
   const [notificationType, setNotificationType] = useState<'success' | 'error' | 'warning'>('success');
   const dataRef = useRef<HTMLTextAreaElement>(null);
+  const [picker, setPicker] = useState<boolean>(false);
 
   useEffect(() => {
     // Load saved theme from storage
@@ -292,21 +293,13 @@ function Popup() {
     }
 
     try{
-      let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if(tab.id === undefined){
-        toast.error('No Tab is found');
-        return;
-      };
-
-      let baseURL = '';
-      if(provider === GEMINI){
-        baseURL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    
+      if (tab.id) {
+        await chrome.tabs.sendMessage(tab.id, { type: picker ? 'STOP_PICKER' : 'START_PICKER' });
       }
-      else if(provider === OLLAMA){
-        baseURL = url;
-      }
-      const response = await chrome.tabs.sendMessage(tab.id, { type: 'fill', data: { apiKey, url: baseURL, model }});
-
+      setPicker(!picker);
+      window.close();
     }
     catch(error: any){
       console.log(error.message);
@@ -448,7 +441,7 @@ function Popup() {
                 </div>
               </div>
               <div className="form-group">
-                <button className='button' onClick={onFillForm}>Fill Form</button>
+                <button className='button' onClick={onFillForm}>{picker ? `Remove Select` : `Select`}</button>
               </div>
             </>
           )}

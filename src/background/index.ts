@@ -37,7 +37,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       .catch((err) => sendResponse({ status: false, error: err.message }));
       break;
 
-    case 'fetchFields':
+    case 'selectionMade':
+      console.log('user selected', request.data);
       break;
 
     // case 'store':
