@@ -1,7 +1,47 @@
+import OpenAI from "openai";
 import { decryption, encryption } from "../crypto";
 
 // Background service worker
 console.log('Background service worker started');
+
+const askLLM = async (label: string, context: string) => {
+  const system = `You are a very helpful assistant and expert in filling application form. You have to answer to the form questions based on context provided. Only provide the answer to the question and nothing else I repeat nothing else. strictly provide 'null' if you do not the know the exact answer to the question or have any doubt about the question.`;
+  try{
+    const storageResponse = await chrome.storage.local.get(['apiKey', 'model', 'url', 'provider']);
+    const provider = storageResponse.provider;
+    const apiKey = storageResponse.apiKey;
+    const model = storageResponse.model;
+    const url = storageResponse.url;
+    const config: any = {
+      
+    }
+
+    if(provider === 'Ollama'){
+      config['apiKey'] = 'dummy';
+      config['baseURL'] = url;
+    }
+    else if(provider === 'Gemini'){
+      config['apiKey'] = apiKey;
+      config['baseURL'] = `https://generativelanguage.googleapis.com/v1beta/openai/`
+    }
+    else{
+      config['apiKey'] = apiKey;
+    }
+
+    const agent = new OpenAI(config);
+    const response = await agent.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: `Context: ${context} \n Answer the form field : ${label} for me`}
+      ]
+    });
+    return response.choices[0].message.content;
+  }
+  catch(error: any){
+    throw Error('Failed to fetch answer from LLM' + error.message);
+  }
+}
 
 // Listen for extension installation
 chrome.runtime.onInstalled.addListener(async (details) => {
@@ -37,8 +77,11 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       .catch((err) => sendResponse({ status: false, error: err.message }));
       break;
 
-    case 'selectionMade':
-      console.log('user selected', request.data);
+    case 'askLLM':
+      const label = request.label;
+      const context = request.context;
+      askLLM(label, context).then((response) => sendResponse({ status: true, response }))
+      .catch((err) => sendResponse({ status: false, error: err.message }));
       break;
 
     // case 'store':

@@ -90,9 +90,13 @@ function Popup() {
       }
     });
 
-    chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'agentQLKey', 'options'], async (result) => {
+    chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'agentQLKey', 'options', 'picker'], async (result) => {
       if(result.provider){
         setProvider(result.provider);
+      }
+
+      if(result.picker !== undefined){
+        setPicker(result.picker);
       }
 
       if(result.apiKey){
