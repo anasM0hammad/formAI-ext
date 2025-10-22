@@ -26,10 +26,21 @@ export const insert = async (data: string) => {
     }
 
     try{
-        const response = await DB?.insert({
-            text: data
-        });
-        
+        if(data.length <= 50){
+            await DB?.insert({
+                text: data
+            });
+        }
+        else{
+            let chunk = 0;
+            let i = 0;
+            while(chunk < Math.ceil(data.length / 50)){
+                const str = data.slice(i, 50+i);
+                await DB?.insert({ text: str });
+                i += 50;
+                chunk++;
+            }
+        }
     }
     catch(error: any){
         throw Error(`Failed to insert in db ${error.message}`);
@@ -42,10 +53,14 @@ export const query = async (data: string) => {
     }
 
     try{
-        const response = await DB?.query(data, { limit: 10 });
+        const response = await DB?.query(data as string, { limit: 10 });
         if(!response) return '';
 
-        return response;
+        let responseText = '';
+        for(const vector of response){
+            responseText += ` ${vector.text}`;
+        }
+        return responseText;
     }
     catch(error: any){
         throw Error(`Query failed ${error.message}`);

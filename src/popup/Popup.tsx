@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ToastContainer, toast } from 'react-toastify';
 import { fetchModelList } from './utils';
-import { deleteVector, insert } from '../embeddings';
+import { deleteVector, insert, query } from '../embeddings';
 
 const MAIN_TAB = 'General';
 const DATA_TAB = 'Data';
@@ -88,6 +88,21 @@ function Popup() {
       if(result.options){
         setOptions(result.options);
       }
+    });
+
+    // Listen for messages from background script
+    chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+      if (request.type === 'queryEmbeddings') {
+        query(request.data)
+          .then(embeddings => {
+            sendResponse({ status: true, data: embeddings });
+          })
+          .catch(error => {
+            sendResponse({ status: false, error: error.message });
+          });
+        return true;
+      }
+      return true; // Keep the message channel open for async response
     });
 
     chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'agentQLKey', 'options', 'picker'], async (result) => {
@@ -206,7 +221,7 @@ function Popup() {
     chrome.storage.sync.set({ theme: newTheme })
   };
 
-  const onSaveConfig = async (event: React.MouseEvent<HTMLButtonElement>) => {
+  const onSaveConfig = async (_event: React.MouseEvent<HTMLButtonElement>) => {
     clearTimeout(notificationId);
 
     if(!provider || ((provider === OLLAMA && !url) || (provider !== OLLAMA && !apiKey))){
@@ -303,10 +318,10 @@ function Popup() {
         await chrome.tabs.sendMessage(tab.id, { type: picker ? 'STOP_PICKER' : 'START_PICKER' });
       }
       setPicker(!picker);
-      window.close();
+      // window.close();
     }
     catch(error: any){
-      console.log(error.message);
+      console.error(error.message);
     }
   }
 
