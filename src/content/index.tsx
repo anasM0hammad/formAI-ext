@@ -289,7 +289,7 @@ async function askLLM(label: string): Promise<string> {
     type: 'askLLM',
     data: { label }
   });
-  return answer.response.trim();
+  return answer.response ? answer.response.trim() : '';
 }
 
 
