@@ -1,3 +1,9 @@
+// Guard against double-injection when content script is re-injected
+if((window as any).__formaiInjected) {
+  // Script already loaded - skip re-initialization
+} else {
+(window as any).__formaiInjected = true;
+
 let isPickerActive = false;
 
 // --- Types ---
@@ -11,6 +17,79 @@ interface FieldResult {
   id: string;
   value: string | null;
   confidence: 'direct' | 'llm' | 'failed';
+}
+
+// --- Site-Specific Form Templates (F-020) ---
+
+interface PlatformTemplate {
+  domains: string[];
+  fields: { selector: string; label: string }[];
+}
+
+const PLATFORM_TEMPLATES: PlatformTemplate[] = [
+  {
+    domains: ['myworkdayjobs.com', 'myworkday.com'],
+    fields: [
+      { selector: '[data-automation-id="legalNameSection_firstName"]', label: 'First Name' },
+      { selector: '[data-automation-id="legalNameSection_lastName"]', label: 'Last Name' },
+      { selector: '[data-automation-id="email"]', label: 'Email' },
+      { selector: '[data-automation-id="phone-number"]', label: 'Phone' },
+      { selector: '[data-automation-id="addressSection_addressLine1"]', label: 'Address' },
+      { selector: '[data-automation-id="addressSection_city"]', label: 'City' },
+      { selector: '[data-automation-id="addressSection_countryRegion"]', label: 'Country' },
+      { selector: '[data-automation-id="addressSection_postalCode"]', label: 'Zip Code' },
+    ]
+  },
+  {
+    domains: ['boards.greenhouse.io', 'job-boards.greenhouse.io'],
+    fields: [
+      { selector: '#first_name', label: 'First Name' },
+      { selector: '#last_name', label: 'Last Name' },
+      { selector: '#email', label: 'Email' },
+      { selector: '#phone', label: 'Phone' },
+      { selector: '#job_application_location', label: 'Location' },
+    ]
+  },
+  {
+    domains: ['jobs.lever.co'],
+    fields: [
+      { selector: 'input[name="name"]', label: 'Full Name' },
+      { selector: 'input[name="email"]', label: 'Email' },
+      { selector: 'input[name="phone"]', label: 'Phone' },
+      { selector: 'input[name="org"]', label: 'Current Company' },
+      { selector: 'input[name="urls[LinkedIn]"]', label: 'LinkedIn URL' },
+      { selector: 'textarea[name="comments"]', label: 'Additional Information' },
+    ]
+  },
+  {
+    domains: ['icims.com'],
+    fields: [
+      { selector: '#firstName', label: 'First Name' },
+      { selector: '#lastName', label: 'Last Name' },
+      { selector: '#email', label: 'Email' },
+      { selector: '#phone', label: 'Phone' },
+      { selector: '#city', label: 'City' },
+      { selector: '#state', label: 'State' },
+      { selector: '#zip', label: 'Zip Code' },
+    ]
+  },
+  {
+    domains: ['linkedin.com'],
+    fields: [
+      { selector: 'input[id*="firstName"]', label: 'First Name' },
+      { selector: 'input[id*="lastName"]', label: 'Last Name' },
+      { selector: 'input[id*="emailAddress"]', label: 'Email' },
+      { selector: 'input[id*="phoneNumber"]', label: 'Phone' },
+      { selector: 'input[id*="city"]', label: 'City' },
+    ]
+  }
+];
+
+function getTemplateForCurrentSite(): PlatformTemplate | null {
+  const hostname = window.location.hostname;
+  return PLATFORM_TEMPLATES.find(t =>
+    t.domains.some(d => hostname === d || hostname.endsWith('.' + d))
+  ) || null;
 }
 
 // --- Label Detection (F-017) ---
@@ -35,8 +114,10 @@ function findNearestLabel(inputElement: HTMLInputElement | HTMLSelectElement | H
   // 4. label[for] attribute
   const inputId = inputElement.id;
   if(inputId) {
-    const labelByFor = document.querySelector(`label[for="${inputId}"]`);
-    if(labelByFor?.textContent?.trim()) return labelByFor.textContent.trim();
+    try {
+      const labelByFor = document.querySelector(`label[for="${CSS.escape(inputId)}"]`);
+      if(labelByFor?.textContent?.trim()) return labelByFor.textContent.trim();
+    } catch { /* Malformed ID, skip */ }
   }
 
   // 5. Placeholder
@@ -81,30 +162,107 @@ function findNearestLabel(inputElement: HTMLInputElement | HTMLSelectElement | H
   const name = inputElement.getAttribute('name');
   if(name) return name.replace(/[_\-\[\]]/g, ' ').trim();
 
+  // 10. Smart Detection (F-022) - Infer from input type and id patterns
+  return smartFieldDetection(inputElement);
+}
+
+// --- Smart Field Detection (F-022) ---
+
+function smartFieldDetection(element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): string | null {
+  // Infer from input type
+  if(element instanceof HTMLInputElement) {
+    const typeMap: Record<string, string> = {
+      'email': 'Email',
+      'tel': 'Phone',
+      'url': 'URL',
+      'number': 'Number',
+      'date': 'Date',
+      'month': 'Month',
+    };
+    if(typeMap[element.type]) return typeMap[element.type];
+  }
+
+  // Infer from id patterns
+  const id = element.id?.toLowerCase() || '';
+  if(id) {
+    if(/email/.test(id)) return 'Email';
+    if(/phone|tel|mobile/.test(id)) return 'Phone';
+    if(/first.?name|fname/.test(id)) return 'First Name';
+    if(/last.?name|lname|surname/.test(id)) return 'Last Name';
+    if(/\bname\b/.test(id) && !/company|user/.test(id)) return 'Full Name';
+    if(/city/.test(id)) return 'City';
+    if(/state|province/.test(id)) return 'State';
+    if(/zip|postal/.test(id)) return 'Zip Code';
+    if(/country/.test(id)) return 'Country';
+    if(/address/.test(id)) return 'Address';
+    if(/linkedin/.test(id)) return 'LinkedIn URL';
+  }
+
+  // Infer from autocomplete attribute
+  const autocomplete = element.getAttribute('autocomplete')?.toLowerCase();
+  if(autocomplete) {
+    const acMap: Record<string, string> = {
+      'given-name': 'First Name',
+      'family-name': 'Last Name',
+      'name': 'Full Name',
+      'email': 'Email',
+      'tel': 'Phone',
+      'street-address': 'Address',
+      'address-line1': 'Address',
+      'address-level2': 'City',
+      'address-level1': 'State',
+      'postal-code': 'Zip Code',
+      'country-name': 'Country',
+      'organization': 'Company',
+      'url': 'Website URL',
+    };
+    if(acMap[autocomplete]) return acMap[autocomplete];
+  }
+
   return null;
 }
 
 // --- Framework Detection ---
 
+let cachedFramework: 'react' | 'vue' | 'angular' | 'vanilla' | null = null;
+
 function detectFramework(): 'react' | 'vue' | 'angular' | 'vanilla' {
+  if(cachedFramework) return cachedFramework;
+
   const body = document.querySelector('body');
   if(!body) return 'vanilla';
 
-  if(document.querySelector('[data-reactroot]') ||
-     document.querySelector('[data-reactid]') ||
-     Object.keys(body).some(k => k.startsWith('__react'))) {
-    return 'react';
+  try {
+    if(document.querySelector('[data-reactroot]') ||
+       document.querySelector('[data-reactid]') ||
+       Object.keys(body).some(k => k.startsWith('__react'))) {
+      cachedFramework = 'react';
+      return cachedFramework;
+    }
+
+    // Vue detection: check for __vue_app__ or attributes starting with data-v-
+    if((body as any).__vue_app__ ||
+       Array.from(document.querySelectorAll('*')).some(el =>
+         Array.from(el.attributes).some(attr => attr.name.startsWith('data-v-'))
+       )) {
+      cachedFramework = 'vue';
+      return cachedFramework;
+    }
+
+    // Angular detection: ng-version is reliable
+    if(document.querySelector('[ng-version]') ||
+       Array.from(document.querySelectorAll('*')).some(el =>
+         Array.from(el.attributes).some(attr => attr.name.startsWith('_nghost'))
+       )) {
+      cachedFramework = 'angular';
+      return cachedFramework;
+    }
+  } catch {
+    // Fallback if any selector query fails
   }
 
-  if(document.querySelector('[data-v-]') || (body as any).__vue_app__) {
-    return 'vue';
-  }
-
-  if(document.querySelector('[ng-version]') || document.querySelector('[_nghost]')) {
-    return 'angular';
-  }
-
-  return 'vanilla';
+  cachedFramework = 'vanilla';
+  return cachedFramework;
 }
 
 // --- Form Filling (F-003 Strategy Pattern) ---
@@ -159,7 +317,8 @@ function fillElement(element: HTMLInputElement | HTMLSelectElement | HTMLTextAre
     } else if(element instanceof HTMLInputElement) {
       const inputType = element.type.toLowerCase();
       if(inputType === 'checkbox' || inputType === 'radio') {
-        element.checked = value === 'true' || value === '1' || value.toLowerCase() === 'yes';
+        const lowerVal = value.toLowerCase();
+        element.checked = lowerVal === 'true' || lowerVal === '1' || lowerVal === 'yes';
         element.dispatchEvent(new Event('change', { bubbles: true }));
       } else if(inputType === 'file') {
         return;
@@ -386,11 +545,15 @@ function setFieldState(element: HTMLElement, state: 'loading' | 'success' | 'err
 }
 
 function addConfidenceIndicator(element: HTMLElement, confidence: 'direct' | 'llm' | 'failed'): void {
-  // Remove existing indicator
-  const existing = element.parentElement?.querySelector('.formai-indicator');
-  existing?.remove();
+  // Remove existing indicator for this element
+  const existingId = element.dataset.formaiIndicatorId;
+  if(existingId) {
+    document.getElementById(existingId)?.remove();
+  }
 
+  const indicatorId = `formai-ind-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   const indicator = document.createElement('span');
+  indicator.id = indicatorId;
   indicator.className = `formai-indicator formai-indicator-${confidence}`;
   indicator.textContent = confidence === 'direct' ? '\u2713' : confidence === 'llm' ? '\u25CB' : '\u2717';
 
@@ -400,6 +563,7 @@ function addConfidenceIndicator(element: HTMLElement, confidence: 'direct' | 'll
   indicator.style.top = `${window.scrollY + rect.top - 5}px`;
   indicator.style.left = `${window.scrollX + rect.right - 5}px`;
   document.body.appendChild(indicator);
+  element.dataset.formaiIndicatorId = indicatorId;
 }
 
 function showStatusBar(message: string, isError = false): void {
@@ -522,12 +686,28 @@ function escapeHtml(text: string): string {
 
 function scanFormFields(): { element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, label: string, id: string }[] {
   const fields: { element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, label: string, id: string }[] = [];
+  let index = 0;
+
+  // F-020: Check for site-specific template first
+  const template = getTemplateForCurrentSite();
+  if(template) {
+    for(const tmplField of template.fields) {
+      const el = document.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(tmplField.selector);
+      if(el && !el.disabled) {
+        const fieldId = `field_${index++}`;
+        el.dataset.formaiId = fieldId;
+        fields.push({ element: el, label: tmplField.label, id: fieldId });
+      }
+    }
+  }
+
+  // Generic scan for all remaining fields not already captured by template
   const selectors = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]):not([type="image"]), select, textarea';
   const elements = document.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(selectors);
+  const capturedElements = new Set(fields.map(f => f.element));
 
-  let index = 0;
   elements.forEach(el => {
-    // Skip invisible or disabled elements
+    if(capturedElements.has(el)) return;
     if(el.disabled || ('readOnly' in el && el.readOnly)) return;
     const style = window.getComputedStyle(el);
     if(style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return;
@@ -544,7 +724,15 @@ function scanFormFields(): { element: HTMLInputElement | HTMLSelectElement | HTM
   return fields;
 }
 
+let isFilling = false;
+
 async function handleFillAll(): Promise<void> {
+  if(isFilling) return;
+  isFilling = true;
+
+  // Clean up previous indicators
+  document.querySelectorAll('.formai-indicator').forEach(el => el.remove());
+
   injectStyles();
   const fields = scanFormFields();
 
@@ -573,22 +761,23 @@ async function handleFillAll(): Promise<void> {
       data: { fields: fieldRequests }
     });
 
-    if(!response.status) {
+    if(!response || !response.status) {
       fields.forEach(f => setFieldState(f.element, 'error'));
       panelItems.forEach(p => p.confidence = 'failed');
       updateFloatingPanel(panelItems);
-      showStatusBar(response.error || 'Failed to fill fields', true);
+      showStatusBar(response?.error || 'Failed to fill fields', true);
       return;
     }
 
-    const results: FieldResult[] = response.results;
+    const results: FieldResult[] = response.results || [];
 
     // Fill each field with results
     for(const result of results) {
-      const fieldData = fields.find(f => f.id === result.id);
-      if(!fieldData) continue;
+      const fieldIndex = fields.findIndex(f => f.id === result.id);
+      if(fieldIndex === -1) continue;
+      const fieldData = fields[fieldIndex];
 
-      const panelItem = panelItems.find(p => p.label === fieldData.label);
+      const panelItem = panelItems[fieldIndex];
 
       if(result.value && result.confidence !== 'failed') {
         fillElement(fieldData.element, result.value);
@@ -603,6 +792,18 @@ async function handleFillAll(): Promise<void> {
 
     updateFloatingPanel(panelItems);
 
+    // F-024: Save fill history
+    const filledCount = results.filter(r => r.value && r.confidence !== 'failed').length;
+    chrome.runtime.sendMessage({
+      type: 'saveFillHistory',
+      data: {
+        domain: window.location.hostname,
+        url: window.location.href,
+        fieldsTotal: fields.length,
+        fieldsFilled: filledCount
+      }
+    }).catch(() => { /* non-critical, ignore */ });
+
     // Enter picker mode for individual corrections
     startElementPicker();
 
@@ -610,7 +811,9 @@ async function handleFillAll(): Promise<void> {
     fields.forEach(f => setFieldState(f.element, 'error'));
     panelItems.forEach(p => p.confidence = 'failed');
     updateFloatingPanel(panelItems);
-    showStatusBar(error.message || 'Failed to fill fields', true);
+    showStatusBar(error?.message || 'Failed to fill fields', true);
+  } finally {
+    isFilling = false;
   }
 }
 
@@ -622,8 +825,8 @@ async function askLLM(label: string): Promise<string> {
     data: { label }
   });
 
-  if(!answer.status) {
-    throw new Error(answer.error || 'LLM request failed');
+  if(!answer || !answer.status) {
+    throw new Error(answer?.error || 'LLM request failed');
   }
 
   return answer.response ? answer.response.trim() : '';
@@ -688,10 +891,6 @@ function stopElementPicker() {
 
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   switch(request.type) {
-    case 'START_PICKER':
-      startElementPicker();
-      sendResponse({ status: true });
-      break;
     case 'STOP_PICKER':
       stopElementPicker();
       sendResponse({ status: true });
@@ -699,7 +898,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     case 'FILL_ALL':
       handleFillAll()
         .then(() => sendResponse({ status: true }))
-        .catch((err) => sendResponse({ status: false, error: err.message }));
+        .catch((err) => sendResponse({ status: false, error: err?.message || String(err) }));
       break;
     default:
       sendResponse({ status: false, error: 'No type matched' });
@@ -725,3 +924,5 @@ if(document.readyState === 'loading') {
 } else {
   initContentScript();
 }
+
+} // end double-injection guard

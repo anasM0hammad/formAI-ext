@@ -55,13 +55,22 @@ async function getLLMClient(): Promise<{ client: OpenAI, model: string }> {
   const config: Record<string, string> = {};
 
   if(provider === 'Ollama') {
+    if(!url) {
+      throw { errorType: 'PROVIDER_NOT_SET' as ErrorType, message: 'Ollama URL not configured. Set it in Settings.' };
+    }
     config['apiKey'] = 'dummy';
     config['baseURL'] = url;
   } else if(provider === 'Gemini') {
+    if(!storageResponse.apiKey) {
+      throw { errorType: 'API_KEY_INVALID' as ErrorType, message: 'API key not found. Please add your key in Settings.' };
+    }
     const apiKey = await decryption(storageResponse.apiKey);
     config['apiKey'] = apiKey;
     config['baseURL'] = `https://generativelanguage.googleapis.com/v1beta/openai/`;
   } else {
+    if(!storageResponse.apiKey) {
+      throw { errorType: 'API_KEY_INVALID' as ErrorType, message: 'API key not found. Please add your key in Settings.' };
+    }
     const apiKey = await decryption(storageResponse.apiKey);
     config['apiKey'] = apiKey;
   }
@@ -84,6 +93,16 @@ function classifyAPIError(error: any): { errorType: ErrorType, message: string }
     return { errorType: 'NETWORK', message: 'Network error. Please check your connection and try again.' };
   }
   return { errorType: 'NETWORK', message: error?.message || 'Unknown error occurred' };
+}
+
+// --- LLM Response Helper ---
+
+function extractLLMContent(response: any): string {
+  const content = response?.choices?.[0]?.message?.content;
+  if(content === undefined || content === null) {
+    throw { errorType: 'NETWORK' as ErrorType, message: 'Received an empty response from the AI model. Please try again.' };
+  }
+  return content;
 }
 
 // --- Direct Field Matching (F-013) ---
@@ -152,7 +171,7 @@ const askLLM = async (label: string) => {
         { role: 'user', content: `Context: ${context} \n Answer the form field : ${label} for me`}
       ]
     });
-    return response.choices[0].message.content;
+    return extractLLMContent(response);
   } catch(error: any) {
     if(error.errorType) throw error;
     throw classifyAPIError(error);
@@ -217,7 +236,7 @@ Return only the JSON object, no other text.`;
       ]
     });
 
-    const content = response.choices[0].message.content || '';
+    const content = extractLLMContent(response);
     const parsed = parseJSON(content);
 
     if(!parsed) {
@@ -293,7 +312,7 @@ Return only the JSON object.`;
       ]
     });
 
-    const content = response.choices[0].message.content || '';
+    const content = extractLLMContent(response);
     const parsed = parseJSON(content);
 
     if(!parsed) {
@@ -347,6 +366,119 @@ async function saveUserData(userData: UserData): Promise<void> {
   }
 }
 
+// --- Cover Letter Generation (F-023) ---
+
+async function generateCoverLetter(jobDescription: string): Promise<string> {
+  const storage = await chrome.storage.local.get(['userData']);
+  const userData: UserData | null = storage.userData || null;
+
+  if(!userData || (!userData.fullName && !userData.workExperience)) {
+    throw { errorType: 'NO_DATA' as ErrorType, message: 'Please add your information in the Data tab first.' };
+  }
+
+  const resumeSummary = [
+    userData.fullName && `Name: ${userData.fullName}`,
+    userData.email && `Email: ${userData.email}`,
+    userData.location && `Location: ${userData.location}`,
+    userData.workExperience && `Work Experience:\n${userData.workExperience}`,
+    userData.education && `Education:\n${userData.education}`,
+    userData.skills && `Skills: ${userData.skills}`,
+  ].filter(Boolean).join('\n\n');
+
+  const prompt = `Based on the following resume data and job description, generate a professional, tailored cover letter. Keep it concise (3-4 paragraphs). Do not include placeholder brackets.
+
+Resume Data:
+${resumeSummary}
+
+Job Description:
+${jobDescription}
+
+Generate the cover letter now.`;
+
+  try {
+    const { client, model } = await getLLMClient();
+    const response = await client.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: 'You are an expert career coach. Write professional, authentic cover letters that are tailored to specific roles. Be concise and impactful.' },
+        { role: 'user', content: prompt }
+      ]
+    });
+    return extractLLMContent(response);
+  } catch(error: any) {
+    if(error.errorType) throw error;
+    throw classifyAPIError(error);
+  }
+}
+
+// --- Fill History (F-024) ---
+
+interface FillHistoryEntry {
+  domain: string;
+  url: string;
+  timestamp: string;
+  fieldsTotal: number;
+  fieldsFilled: number;
+}
+
+async function saveFillHistory(entry: Omit<FillHistoryEntry, 'timestamp'>): Promise<void> {
+  const storage = await chrome.storage.local.get(['fillHistory']);
+  const history: FillHistoryEntry[] = storage.fillHistory || [];
+
+  history.unshift({
+    ...entry,
+    timestamp: new Date().toISOString()
+  });
+
+  // Keep only the last 50 entries
+  if(history.length > 50) {
+    history.length = 50;
+  }
+
+  await chrome.storage.local.set({ fillHistory: history });
+}
+
+// --- Data Export/Import (F-025) ---
+
+async function exportAllData(): Promise<Record<string, any>> {
+  const local = await chrome.storage.local.get(['userData', 'fillHistory', 'provider', 'model', 'url']);
+  const sync = await chrome.storage.sync.get(['theme', 'onboardingComplete']);
+
+  return {
+    version: '1.0.0',
+    exportedAt: new Date().toISOString(),
+    userData: local.userData || null,
+    fillHistory: local.fillHistory || [],
+    settings: {
+      provider: local.provider || '',
+      model: local.model || '',
+      url: local.url || '',
+      theme: sync.theme || 'dark',
+    }
+  };
+}
+
+async function importAllData(data: Record<string, any>): Promise<void> {
+  if(data.userData) {
+    await saveUserData(data.userData);
+  }
+  if(data.fillHistory) {
+    await chrome.storage.local.set({ fillHistory: data.fillHistory });
+  }
+  if(data.settings) {
+    if(data.settings.provider) {
+      await chrome.storage.local.set({
+        provider: data.settings.provider,
+        model: data.settings.model || '',
+        url: data.settings.url || ''
+      });
+    }
+    if(data.settings.theme) {
+      await chrome.storage.sync.set({ theme: data.settings.theme });
+    }
+  }
+}
+
 // --- Model Fetching ---
 
 const fetchModels = async (provider: string, apiKey?: string, url?: string) => {
@@ -376,7 +508,7 @@ const fetchModels = async (provider: string, apiKey?: string, url?: string) => {
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   if(details.reason === 'install') {
-    chrome.storage.sync.set({ initialized: true });
+    await chrome.storage.sync.set({ initialized: true });
 
     const value = crypto.getRandomValues(new Uint8Array(32));
     await chrome.storage.local.set({
@@ -423,12 +555,6 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         .catch(handleError);
       break;
 
-    case 'store':
-      insert(request.data)
-        .then(() => sendResponse({ status: true, message: 'Data stored successfully' }))
-        .catch(handleError);
-      break;
-
     case 'saveUserData':
       saveUserData(request.data)
         .then(() => sendResponse({ status: true, message: 'User data saved' }))
@@ -437,8 +563,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
 
     case 'reset':
       deleteVector()
-        .then(() => {
-          chrome.storage.local.remove('userData');
+        .then(async () => {
+          await chrome.storage.local.remove(['userData', 'fillHistory']);
           sendResponse({ status: true, message: 'All data reset' });
         })
         .catch(handleError);
@@ -453,6 +579,30 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     case 'parseResume':
       parseResumeText(request.data.text)
         .then((userData) => sendResponse({ status: true, userData }))
+        .catch(handleError);
+      break;
+
+    case 'generateCoverLetter':
+      generateCoverLetter(request.data.jobDescription)
+        .then((coverLetter) => sendResponse({ status: true, coverLetter }))
+        .catch(handleError);
+      break;
+
+    case 'saveFillHistory':
+      saveFillHistory(request.data)
+        .then(() => sendResponse({ status: true }))
+        .catch(handleError);
+      break;
+
+    case 'exportData':
+      exportAllData()
+        .then((data) => sendResponse({ status: true, data }))
+        .catch(handleError);
+      break;
+
+    case 'importData':
+      importAllData(request.data)
+        .then(() => sendResponse({ status: true, message: 'Data imported successfully' }))
         .catch(handleError);
       break;
 
