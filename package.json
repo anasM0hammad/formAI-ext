@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@babycommando/entity-db": "^1.0.11",
+    "@mlc-ai/web-llm": "^0.2.81",
     "openai": "^6.6.0",
     "pdfjs-dist": "^5.5.207",
     "react": "^19.2.0",

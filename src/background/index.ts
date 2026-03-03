@@ -1,9 +1,49 @@
 import OpenAI from "openai";
+import { CreateMLCEngine } from "@mlc-ai/web-llm";
+import type { MLCEngine } from "@mlc-ai/web-llm";
 import { decryption, encryption } from "../crypto";
 import { initDB, insert, query, deleteVector } from "../embeddings";
 
 // Initialize EntityDB in background context
 initDB();
+
+// --- WebLLM Local AI (F-021) ---
+
+const WEBLLM_DEFAULT_MODEL = 'gemma-2-2b-it-q4f16_1-MLC-1k';
+
+let webllmEngine: MLCEngine | null = null;
+let webllmStatus: 'idle' | 'downloading' | 'ready' | 'error' = 'idle';
+let webllmProgressPct = 0;
+let webllmProgressText = '';
+let webllmError = '';
+
+async function initWebLLM(): Promise<void> {
+  webllmStatus = 'downloading';
+  webllmProgressPct = 0;
+  webllmProgressText = 'Initializing...';
+  webllmError = '';
+
+  try {
+    if(!(navigator as any).gpu) {
+      throw new Error('WebGPU is not available. Please use Chrome 124+ on a device with GPU support.');
+    }
+
+    webllmEngine = await CreateMLCEngine(WEBLLM_DEFAULT_MODEL, {
+      initProgressCallback: (report: any) => {
+        webllmProgressPct = Math.round((report.progress || 0) * 100);
+        webllmProgressText = report.text || '';
+      }
+    });
+    webllmStatus = 'ready';
+    webllmProgressText = 'Model loaded and ready';
+    webllmProgressPct = 100;
+  } catch(error: any) {
+    webllmStatus = 'error';
+    webllmError = error?.message || 'Failed to initialize local AI model';
+    webllmEngine = null;
+    throw { errorType: 'NETWORK' as ErrorType, message: webllmError };
+  }
+}
 
 // --- Types ---
 
@@ -127,6 +167,42 @@ function extractLLMContent(response: any): string {
   return content;
 }
 
+// --- Unified LLM Completion ---
+
+async function generateCompletion(systemPrompt: string, userPrompt: string): Promise<string> {
+  const storage = await chrome.storage.local.get(['provider']);
+
+  if(storage.provider === 'WebLLM') {
+    // Auto-reload from cache if service worker was restarted
+    if(!webllmEngine || webllmStatus !== 'ready') {
+      await initWebLLM();
+    }
+    try {
+      const response = await webllmEngine!.chat.completions.create({
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ]
+      });
+      return extractLLMContent(response);
+    } catch(error: any) {
+      if(error.errorType) throw error;
+      throw { errorType: 'NETWORK' as ErrorType, message: error?.message || 'Local AI inference failed' };
+    }
+  }
+
+  // Cloud providers (OpenAI, Gemini, Ollama)
+  const { client, model } = await getLLMClient();
+  const response = await llmCreateWithRetry(client, {
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ]
+  });
+  return extractLLMContent(response);
+}
+
 // --- Direct Field Matching (F-013) ---
 
 function tryDirectMatch(label: string, userData: UserData | null): string | null {
@@ -184,16 +260,7 @@ const askLLM = async (label: string) => {
     if(!context || !context.trim().length) {
       return null;
     }
-
-    const { client, model } = await getLLMClient();
-    const response = await llmCreateWithRetry(client, {
-      model,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: `Context: ${context} \n Answer the form field : ${label} for me`}
-      ]
-    });
-    return extractLLMContent(response);
+    return await generateCompletion(system, `Context: ${context} \n Answer the form field : ${label} for me`);
   } catch(error: any) {
     if(error.errorType) throw error;
     throw classifyAPIError(error);
@@ -249,16 +316,10 @@ ${fieldList}
 Return only the JSON object, no other text.`;
 
   try {
-    const { client, model } = await getLLMClient();
-    const response = await llmCreateWithRetry(client, {
-      model,
-      messages: [
-        { role: 'system', content: 'You are a helpful assistant expert in filling job application forms. Return only valid JSON.' },
-        { role: 'user', content: prompt }
-      ]
-    });
-
-    const content = extractLLMContent(response);
+    const content = await generateCompletion(
+      'You are a helpful assistant expert in filling job application forms. Return only valid JSON.',
+      prompt
+    );
     const parsed = parseJSON(content);
 
     if(!parsed) {
@@ -351,16 +412,10 @@ ${trimmed}
 Return only the JSON object, no explanation.`;
 
   try {
-    const { client, model } = await getLLMClient();
-    const response = await llmCreateWithRetry(client, {
-      model,
-      messages: [
-        { role: 'system', content: 'You are an expert resume parser. Extract structured information and return valid JSON only.' },
-        { role: 'user', content: prompt }
-      ]
-    });
-
-    const content = extractLLMContent(response);
+    const content = await generateCompletion(
+      'You are an expert resume parser. Extract structured information and return valid JSON only.',
+      prompt
+    );
     const parsed = parseJSON(content);
 
     if(!parsed) {
@@ -445,15 +500,10 @@ ${jobDescription}
 Generate the cover letter now.`;
 
   try {
-    const { client, model } = await getLLMClient();
-    const response = await llmCreateWithRetry(client, {
-      model,
-      messages: [
-        { role: 'system', content: 'You are an expert career coach. Write professional, authentic cover letters that are tailored to specific roles. Be concise and impactful.' },
-        { role: 'user', content: prompt }
-      ]
-    });
-    return extractLLMContent(response);
+    return await generateCompletion(
+      'You are an expert career coach. Write professional, authentic cover letters that are tailored to specific roles. Be concise and impactful.',
+      prompt
+    );
   } catch(error: any) {
     if(error.errorType) throw error;
     throw classifyAPIError(error);
@@ -629,6 +679,28 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       fetchModels(request.data.provider, request.data.apiKey, request.data.url)
         .then((models) => sendResponse({ status: true, models }))
         .catch(handleError);
+      break;
+
+    case 'initWebLLM':
+      if(webllmStatus === 'downloading') {
+        sendResponse({ status: true, message: 'Download already in progress' });
+      } else if(webllmStatus === 'ready' && webllmEngine) {
+        sendResponse({ status: true, message: 'Model already loaded' });
+      } else {
+        initWebLLM()
+          .then(() => sendResponse({ status: true, message: 'WebLLM model loaded' }))
+          .catch(handleError);
+      }
+      break;
+
+    case 'getWebLLMStatus':
+      sendResponse({
+        status: true,
+        webllmStatus,
+        webllmProgressPct,
+        webllmProgressText,
+        webllmError
+      });
       break;
 
     case 'parseResume':

@@ -13,8 +13,9 @@ const CONFIG = 'Settings';
 const OLLAMA = 'Ollama';
 const OPENAI = 'OpenAI';
 const GEMINI = 'Gemini';
+const WEBLLM = 'WebLLM';
 
-type Providers = typeof OLLAMA | typeof GEMINI | typeof OPENAI | '';
+type Providers = typeof OLLAMA | typeof GEMINI | typeof OPENAI | typeof WEBLLM | '';
 
 interface UserData {
   fullName: string;
@@ -99,6 +100,13 @@ function OnboardingWizard({ theme, onComplete }: { theme: 'light' | 'dark', onCo
   const [userData, setUserData] = useState<UserData>({ ...emptyUserData });
   const fetchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  // WebLLM state
+  const [wllmStatus, setWllmStatus] = useState<'idle' | 'downloading' | 'ready' | 'error'>('idle');
+  const [wllmPct, setWllmPct] = useState(0);
+  const [wllmText, setWllmText] = useState('');
+  const [wllmError, setWllmError] = useState('');
+  const wllmPollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+
   // On mount: check if step 1 was already completed (user closed popup mid-onboarding)
   useEffect(() => {
     chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'userData'], async (result) => {
@@ -114,11 +122,19 @@ function OnboardingWizard({ theme, onComplete }: { theme: 'light' | 'dark', onCo
             if(response?.status) setAPIKey(response.decrypted);
           } catch { /* ignore */ }
         }
+        // Check WebLLM status if it was the provider
+        if(result.provider === WEBLLM) {
+          try {
+            const s = await chrome.runtime.sendMessage({ type: 'getWebLLMStatus' });
+            if(s?.status) { setWllmStatus(s.webllmStatus); setWllmPct(s.webllmProgressPct); }
+          } catch { /* ignore */ }
+        }
         setStep(2);
       } else {
         setStep(1);
       }
     });
+    return () => { if(wllmPollRef.current) clearInterval(wllmPollRef.current); };
   }, []);
 
   const fetchModels = async (prov: Providers, key?: string, localUrl?: string) => {
@@ -159,10 +175,61 @@ function OnboardingWizard({ theme, onComplete }: { theme: 'light' | 'dark', onCo
   };
 
   // Show model field once provider is selected and credentials are provided
-  const showModelField = provider === OLLAMA || (provider && apiKey.length > 0);
+  const showModelField = provider === OLLAMA || (provider && provider !== WEBLLM && apiKey.length > 0);
+
+  // WebLLM download with polling
+  const pollWebLLM = () => {
+    if(wllmPollRef.current) clearInterval(wllmPollRef.current);
+    wllmPollRef.current = setInterval(async () => {
+      try {
+        const r = await chrome.runtime.sendMessage({ type: 'getWebLLMStatus' });
+        if(r?.status) {
+          setWllmStatus(r.webllmStatus);
+          setWllmPct(r.webllmProgressPct);
+          setWllmText(r.webllmProgressText);
+          if(r.webllmError) setWllmError(r.webllmError);
+          if(r.webllmStatus === 'ready' || r.webllmStatus === 'error' || r.webllmStatus === 'idle') {
+            clearInterval(wllmPollRef.current);
+          }
+        }
+      } catch { /* ignore */ }
+    }, 500);
+  };
+
+  const startWebLLMDownload = async () => {
+    setWllmStatus('downloading');
+    setWllmText('Initializing...');
+    setWllmPct(0);
+    setWllmError('');
+    pollWebLLM();
+    try {
+      const r = await chrome.runtime.sendMessage({ type: 'initWebLLM' });
+      if(r?.status) {
+        setWllmStatus('ready');
+        setWllmPct(100);
+      } else {
+        setWllmStatus('error');
+        setWllmError(r?.error || 'Download failed');
+      }
+    } catch(e: any) {
+      setWllmStatus('error');
+      setWllmError(e?.message || 'Download failed');
+    }
+    if(wllmPollRef.current) clearInterval(wllmPollRef.current);
+  };
 
   const saveStep1 = async () => {
     if(!provider) { toast.error('Please select a provider'); return; }
+
+    // WebLLM: no API key or model selection needed
+    if(provider === WEBLLM) {
+      if(wllmStatus !== 'ready') { toast.error('Please download the AI model first'); return; }
+      await chrome.storage.local.set({ provider, model: 'webllm-local' });
+      setModel('webllm-local');
+      setStep(2);
+      return;
+    }
+
     if(provider !== OLLAMA && !apiKey) { toast.error('API key is required'); return; }
     if(!model) { toast.error('Please select a model'); return; }
 
@@ -220,18 +287,49 @@ function OnboardingWizard({ theme, onComplete }: { theme: 'light' | 'dark', onCo
             <div className="form-group">
               <label>Provider</label>
               <select className="form-control" value={provider} onChange={e => {
-                setProvider(e.target.value as Providers);
+                const p = e.target.value as Providers;
+                setProvider(p);
                 setAPIKey('');
-                fetchModels(e.target.value as Providers, '', url);
+                if(p && p !== WEBLLM) fetchModels(p, '', url);
               }}>
                 <option value="">Select</option>
                 <option value={OPENAI}>{OPENAI}</option>
                 <option value={GEMINI}>{GEMINI}</option>
                 <option value={OLLAMA}>{OLLAMA}</option>
+                <option value={WEBLLM}>WebLLM (Local AI)</option>
               </select>
             </div>
 
-            {provider && provider !== OLLAMA && (
+            {provider === WEBLLM && (
+              <div className="webllm-section">
+                <p className="webllm-info">
+                  Run AI entirely on your device. No API key, no cloud, full privacy.
+                  One-time download of ~1.6GB model.
+                </p>
+                {wllmStatus === 'idle' && (
+                  <button className="button-primary" onClick={startWebLLMDownload}>Download AI Model</button>
+                )}
+                {wllmStatus === 'downloading' && (
+                  <div className="webllm-progress">
+                    <div className="progress-bar-track">
+                      <div className="progress-bar-fill" style={{ width: `${wllmPct}%` }} />
+                    </div>
+                    <p className="progress-text">{wllmText || `${wllmPct}%`}</p>
+                  </div>
+                )}
+                {wllmStatus === 'ready' && (
+                  <p className="webllm-ready">Local AI model loaded and ready</p>
+                )}
+                {wllmStatus === 'error' && (
+                  <div>
+                    <p className="webllm-error">{wllmError || 'Download failed'}</p>
+                    <button className="button-primary" onClick={startWebLLMDownload}>Retry</button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {provider && provider !== OLLAMA && provider !== WEBLLM && (
               <div className="form-group">
                 <label>API Key</label>
                 <input type="password" className="form-control" value={apiKey} placeholder="Paste your API key"
@@ -262,7 +360,7 @@ function OnboardingWizard({ theme, onComplete }: { theme: 'light' | 'dark', onCo
             )}
 
             <div className="disclaimer">
-              <p>Your key is encrypted and stored locally on your device.</p>
+              <p>{provider === WEBLLM ? 'Everything runs locally on your device.' : 'Your key is encrypted and stored locally on your device.'}</p>
             </div>
 
             <div className="onboarding-actions">
@@ -365,6 +463,13 @@ function Popup() {
   // F-025: Data import
   const importFileRef = useRef<HTMLInputElement>(null);
 
+  // F-021: WebLLM state (for Settings tab)
+  const [wllmStatus, setWllmStatus] = useState<'idle' | 'downloading' | 'ready' | 'error'>('idle');
+  const [wllmPct, setWllmPct] = useState(0);
+  const [wllmText, setWllmText] = useState('');
+  const [wllmError, setWllmError] = useState('');
+  const wllmPollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+
   useEffect(() => {
     // Check onboarding state
     chrome.storage.sync.get(['theme', 'onboardingComplete'], (result) => {
@@ -388,11 +493,20 @@ function Popup() {
           toast.error(`API key can't be fetched: ${error.message}`);
         }
       }
+
+      // Check WebLLM status if it's the active provider
+      if(result.provider === WEBLLM) {
+        try {
+          const s = await chrome.runtime.sendMessage({ type: 'getWebLLMStatus' });
+          if(s?.status) { setWllmStatus(s.webllmStatus); setWllmPct(s.webllmProgressPct); }
+        } catch { /* ignore */ }
+      }
     });
 
     return () => {
       clearTimeout(notificationId);
       clearTimeout(fetchDebounceRef.current);
+      if(wllmPollRef.current) clearInterval(wllmPollRef.current);
     }
   }, []);
 
@@ -554,8 +668,63 @@ function Popup() {
     chrome.storage.sync.set({ theme: newTheme });
   };
 
+  // WebLLM helpers for Settings tab
+  const pollWebLLMSettings = () => {
+    if(wllmPollRef.current) clearInterval(wllmPollRef.current);
+    wllmPollRef.current = setInterval(async () => {
+      try {
+        const r = await chrome.runtime.sendMessage({ type: 'getWebLLMStatus' });
+        if(r?.status) {
+          setWllmStatus(r.webllmStatus);
+          setWllmPct(r.webllmProgressPct);
+          setWllmText(r.webllmProgressText);
+          if(r.webllmError) setWllmError(r.webllmError);
+          if(r.webllmStatus === 'ready' || r.webllmStatus === 'error' || r.webllmStatus === 'idle') {
+            clearInterval(wllmPollRef.current);
+          }
+        }
+      } catch { /* ignore */ }
+    }, 500);
+  };
+
+  const startWebLLMSettings = async () => {
+    setWllmStatus('downloading');
+    setWllmText('Initializing...');
+    setWllmPct(0);
+    setWllmError('');
+    pollWebLLMSettings();
+    try {
+      const r = await chrome.runtime.sendMessage({ type: 'initWebLLM' });
+      if(r?.status) {
+        setWllmStatus('ready');
+        setWllmPct(100);
+      } else {
+        setWllmStatus('error');
+        setWllmError(r?.error || 'Download failed');
+      }
+    } catch(e: any) {
+      setWllmStatus('error');
+      setWllmError(e?.message || 'Download failed');
+    }
+    if(wllmPollRef.current) clearInterval(wllmPollRef.current);
+  };
+
   const onSaveConfig = async (_event: React.MouseEvent<HTMLButtonElement>) => {
     clearTimeout(notificationId);
+
+    // WebLLM: just save provider + dummy model
+    if(provider === WEBLLM) {
+      if(wllmStatus !== 'ready') {
+        const id = setTimeout(() => resetNotification(), 2000) as unknown as number;
+        createNotification('Please download the AI model first', id, 'error');
+        return;
+      }
+      chrome.storage.local.set({ provider, model: 'webllm-local' });
+      setModel('webllm-local');
+      const id = setTimeout(() => resetNotification(), 2000) as unknown as number;
+      createNotification('Configuration saved successfully', id);
+      return;
+    }
 
     if(!provider || ((provider === OLLAMA && !url) || (provider !== OLLAMA && !apiKey))) {
       const id = setTimeout(() => resetNotification(), 2000) as unknown as number;
@@ -581,9 +750,10 @@ function Popup() {
   }
 
   const selectProvider = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    setProvider(event.target.value as Providers);
+    const p = event.target.value as Providers;
+    setProvider(p);
     setAPIKey('');
-    fetchModels(event.target.value as Providers, '', url);
+    if(p && p !== WEBLLM) fetchModels(p, '', url);
   }
 
   const selectModel = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -611,7 +781,7 @@ function Popup() {
       toast.error('No model selected. Choose a model in Settings.');
       return;
     }
-    if(provider !== OLLAMA && !apiKey) {
+    if(provider !== OLLAMA && provider !== WEBLLM && !apiKey) {
       toast.error('API key is not set. Add your key in Settings.');
       return;
     }
@@ -1041,9 +1211,37 @@ function Popup() {
                 <option value={OPENAI}>{OPENAI}</option>
                 <option value={GEMINI}>{GEMINI}</option>
                 <option value={OLLAMA}>{OLLAMA}</option>
+                <option value={WEBLLM}>WebLLM (Local AI)</option>
               </select>
             </div>
-            {provider && provider !== OLLAMA && (
+            {provider === WEBLLM && (
+              <div className="webllm-section">
+                <p className="webllm-info">
+                  Run AI entirely on your device. No API key, no cloud, full privacy.
+                </p>
+                {wllmStatus === 'idle' && (
+                  <button className="button-primary" onClick={startWebLLMSettings}>Download AI Model (~1.6GB)</button>
+                )}
+                {wllmStatus === 'downloading' && (
+                  <div className="webllm-progress">
+                    <div className="progress-bar-track">
+                      <div className="progress-bar-fill" style={{ width: `${wllmPct}%` }} />
+                    </div>
+                    <p className="progress-text">{wllmText || `${wllmPct}%`}</p>
+                  </div>
+                )}
+                {wllmStatus === 'ready' && (
+                  <p className="webllm-ready">Local AI model loaded and ready</p>
+                )}
+                {wllmStatus === 'error' && (
+                  <div>
+                    <p className="webllm-error">{wllmError || 'Download failed'}</p>
+                    <button className="button-primary" onClick={startWebLLMSettings}>Retry</button>
+                  </div>
+                )}
+              </div>
+            )}
+            {provider && provider !== OLLAMA && provider !== WEBLLM && (
               <div className="form-group">
                 <label>API Key</label>
                 <input type="password" className='form-control' onChange={selectKey} value={apiKey} />
@@ -1055,7 +1253,7 @@ function Popup() {
                 <input className='form-control' onChange={selectUrl} value={url} />
               </div>
             )}
-            {provider && (
+            {provider && provider !== WEBLLM && (
               <div className="form-group">
                 <label>LLM Model</label>
                 <input className='form-control' onChange={selectModel} value={model} list='modelList'
@@ -1068,7 +1266,7 @@ function Popup() {
               </div>
             )}
             <div className='disclaimer'>
-              <p>The API keys will be stored locally and not be seen by FormAI</p>
+              <p>{provider === WEBLLM ? 'Everything runs locally on your device.' : 'The API keys will be stored locally and not be seen by FormAI'}</p>
             </div>
             <div className="form-group">
               <button className='button' onClick={onSaveConfig}>Save Config</button>

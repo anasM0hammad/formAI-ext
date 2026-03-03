@@ -1032,6 +1032,60 @@ h1 {
   opacity: 0.7;
 }
 
+/* --- WebLLM (F-021) --- */
+
+.webllm-section {
+  margin: 8px 0 12px;
+}
+
+.webllm-info {
+  font-size: 12px;
+  opacity: 0.8;
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.webllm-progress {
+  margin: 10px 0;
+}
+
+.progress-bar-track {
+  width: 100%;
+  height: 8px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 11px;
+  opacity: 0.7;
+  margin: 4px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.webllm-ready {
+  font-size: 13px;
+  color: #22c55e;
+  font-weight: 500;
+  margin: 8px 0;
+}
+
+.webllm-error {
+  font-size: 12px;
+  color: #ef4444;
+  margin: 0 0 8px;
+}
+
 /* --- Structured Form --- */
 
 .structured-form .form-group {
