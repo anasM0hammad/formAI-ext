@@ -345,10 +345,12 @@ Return only the JSON object.`;
 // --- Save User Data (F-012) ---
 
 async function saveUserData(userData: UserData): Promise<void> {
-  // Save structured data to local storage for direct matching
+  // Save structured data to local storage immediately (fast)
   await chrome.storage.local.set({ userData });
+}
 
-  // Build text for embeddings from all fields
+// Rebuild embeddings index from user data (slow — can involve model download)
+async function rebuildEmbeddings(userData: UserData): Promise<void> {
   const textParts = [
     userData.fullName && `My name is ${userData.fullName}`,
     userData.email && `My email is ${userData.email}`,
@@ -362,7 +364,6 @@ async function saveUserData(userData: UserData): Promise<void> {
   ].filter(Boolean);
 
   if(textParts.length > 0) {
-    // Clear old embeddings and re-insert
     await deleteVector();
     for(const part of textParts) {
       if(part && part.trim().length > 0) {
@@ -467,6 +468,8 @@ async function exportAllData(): Promise<Record<string, any>> {
 async function importAllData(data: Record<string, any>): Promise<void> {
   if(data.userData) {
     await saveUserData(data.userData);
+    // Rebuild embeddings in background after import
+    rebuildEmbeddings(data.userData).catch(() => { /* non-critical */ });
   }
   if(data.fillHistory) {
     await chrome.storage.local.set({ fillHistory: data.fillHistory });
@@ -563,7 +566,11 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
 
     case 'saveUserData':
       saveUserData(request.data)
-        .then(() => sendResponse({ status: true, message: 'User data saved' }))
+        .then(() => {
+          sendResponse({ status: true, message: 'User data saved' });
+          // Rebuild embeddings in the background (slow, don't block UI)
+          rebuildEmbeddings(request.data).catch(() => { /* non-critical */ });
+        })
         .catch(handleError);
       break;
 
