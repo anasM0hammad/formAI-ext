@@ -259,6 +259,12 @@ Return only the JSON object, no other text.`;
 async function fillAllFields(fields: FieldRequest[]): Promise<FieldResult[]> {
   const storage = await chrome.storage.local.get(['userData']);
   const userData: UserData | null = storage.userData || null;
+
+  // Check if user has any data to fill with
+  if(!userData || (!userData.fullName && !userData.email && !userData.phone && !userData.workExperience)) {
+    throw { errorType: 'NO_DATA' as ErrorType, message: 'No personal data found. Please add your information in the Data tab before filling forms.' };
+  }
+
   const results: FieldResult[] = [];
   const llmFields: FieldRequest[] = [];
 
