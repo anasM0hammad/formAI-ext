@@ -1,287 +1,244 @@
-
-// Content script
-console.log('Content script loaded');
 let isPickerActive = false;
 
-function findNearestLabel(inputElement: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): HTMLLabelElement | null {
+// Enhanced label detection with aria attributes, placeholder, and nearby text
+function findNearestLabel(inputElement: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): string | null {
+  // Check aria-label first (common in modern frameworks like Workday)
+  const ariaLabel = inputElement.getAttribute('aria-label');
+  if(ariaLabel?.trim()) return ariaLabel.trim();
+
+  // Check aria-labelledby
+  const ariaLabelledBy = inputElement.getAttribute('aria-labelledby');
+  if(ariaLabelledBy) {
+    const labelEl = document.getElementById(ariaLabelledBy);
+    if(labelEl?.textContent?.trim()) return labelEl.textContent.trim();
+  }
+
   // Check if label wraps the input
   const parentLabel = inputElement.closest('label');
-  if (parentLabel) return parentLabel;
-  
+  if(parentLabel?.textContent?.trim()) return parentLabel.textContent.trim();
+
   // Check for label with matching 'for' attribute
   const inputId = inputElement.id;
-  if (inputId) {
+  if(inputId) {
     const labelByFor = document.querySelector(`label[for="${inputId}"]`);
-    if (labelByFor) return labelByFor as HTMLLabelElement;
+    if(labelByFor?.textContent?.trim()) return labelByFor.textContent.trim();
   }
-  
+
+  // Check placeholder attribute
+  const placeholder = inputElement.getAttribute('placeholder');
+  if(placeholder?.trim()) return placeholder.trim();
+
+  // Check title attribute
+  const title = inputElement.getAttribute('title');
+  if(title?.trim()) return title.trim();
+
   // Find previous sibling label
   let prevSibling = inputElement.previousElementSibling;
-  while (prevSibling) {
-    if (prevSibling.tagName === 'LABEL') {
-      return prevSibling as HTMLLabelElement;
+  while(prevSibling) {
+    if(prevSibling.tagName === 'LABEL' && prevSibling.textContent?.trim()) {
+      return prevSibling.textContent.trim();
     }
     prevSibling = prevSibling.previousElementSibling;
   }
-  
+
   // Find label in parent's previous siblings
   let parent = inputElement.parentElement;
-  while (parent) {
+  while(parent) {
     let prevParentSibling = parent.previousElementSibling;
-    while (prevParentSibling) {
-      if (prevParentSibling.tagName === 'LABEL') {
-        return prevParentSibling as HTMLLabelElement;
+    while(prevParentSibling) {
+      if(prevParentSibling.tagName === 'LABEL' && prevParentSibling.textContent?.trim()) {
+        return prevParentSibling.textContent.trim();
       }
       const labelInside = prevParentSibling.querySelector('label');
-      if (labelInside) return labelInside as HTMLLabelElement;
-      
+      if(labelInside?.textContent?.trim()) return labelInside.textContent.trim();
+
+      // Check nearby span or div text
+      const textEl = prevParentSibling.querySelector('span, div');
+      if(textEl?.textContent?.trim()) return textEl.textContent.trim();
+
       prevParentSibling = prevParentSibling.previousElementSibling;
     }
     parent = parent.parentElement;
   }
-  
+
+  // Fallback to name attribute (convert field_name to readable text)
+  const name = inputElement.getAttribute('name');
+  if(name) return name.replace(/[_\-\[\]]/g, ' ').trim();
+
   return null;
 }
 
-// Helper function to force visual updates
-function forceVisualUpdate(element: HTMLElement): void {
-  try {
-    // Method 1: Force reflow by accessing offsetHeight
-    element.offsetHeight;
-    
-    // Method 2: Temporarily change display
-    const originalDisplay = element.style.display;
-    element.style.display = 'none';
-    element.offsetHeight; // Force reflow
-    element.style.display = originalDisplay;
-    
-    // Method 3: Use transform to force GPU layer
-    const originalTransform = element.style.transform;
-    element.style.transform = 'translateZ(0)';
-    element.offsetHeight; // Force reflow
-    element.style.transform = originalTransform;
-    
-    // Method 4: Trigger a resize event
-    element.dispatchEvent(new Event('resize', { bubbles: true }));
-    
-  } catch (error) {
-    console.error('Error forcing visual update:', error);
+// Detect the framework used on the page for optimal form filling strategy
+function detectFramework(): 'react' | 'vue' | 'angular' | 'vanilla' {
+  const body = document.querySelector('body');
+  if(!body) return 'vanilla';
+
+  // React detection
+  if(document.querySelector('[data-reactroot]') ||
+     document.querySelector('[data-reactid]') ||
+     Object.keys(body).some(k => k.startsWith('__react'))) {
+    return 'react';
+  }
+
+  // Vue detection
+  if(document.querySelector('[data-v-]') || (body as any).__vue_app__) {
+    return 'vue';
+  }
+
+  // Angular detection
+  if(document.querySelector('[ng-version]') || document.querySelector('[_nghost]')) {
+    return 'angular';
+  }
+
+  return 'vanilla';
+}
+
+function fillSelectElement(element: HTMLSelectElement, value: string): void {
+  element.value = value;
+
+  // If no exact match, try case-insensitive text/value matching
+  if(element.value !== value) {
+    const options = Array.from(element.options);
+    const matchingOption = options.find(opt =>
+      opt.text.toLowerCase().includes(value.toLowerCase()) ||
+      opt.value.toLowerCase().includes(value.toLowerCase())
+    );
+    if(matchingOption) {
+      element.value = matchingOption.value;
+    }
+  }
+
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function fillInputElement(element: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  const framework = detectFramework();
+
+  if(framework === 'react') {
+    // React overrides the value setter, use the native prototype setter
+    const prototype = element instanceof HTMLTextAreaElement
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+    const nativeSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+
+    if(nativeSetter) {
+      nativeSetter.call(element, value);
+    } else {
+      element.value = value;
+    }
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  } else {
+    // Vue, Angular, and vanilla - standard approach
+    element.value = value;
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
   }
 }
 
 function fillElement(element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, value: string): void {
   try {
-    // Set focus
     element.focus();
-    
-    // Force initial visual update
-    forceVisualUpdate(element);
-    
-    if (element instanceof HTMLSelectElement) {
-      // For select elements
-      element.value = value;
-      
-      // If value doesn't exist, try to find by text
-      if (element.value !== value) {
-        const options = Array.from(element.options);
-        const matchingOption = options.find(opt => 
-          opt.text.toLowerCase().includes(value.toLowerCase()) ||
-          opt.value.toLowerCase().includes(value.toLowerCase())
-        );
-        if (matchingOption) {
-          element.value = matchingOption.value;
-        } else {
-          console.warn('No matching option found for value:', value);
-        }
-      }
-      
-    } else if (element instanceof HTMLInputElement) {
-      // For input elements
+
+    if(element instanceof HTMLSelectElement) {
+      fillSelectElement(element, value);
+    } else if(element instanceof HTMLInputElement) {
       const inputType = element.type.toLowerCase();
-      
-      if (inputType === 'checkbox' || inputType === 'radio') {
-        element.checked = value === 'true' || value === '1';
-      } else if (inputType === 'file') {
-        console.warn('File inputs cannot be programmatically filled for security reasons');
+      if(inputType === 'checkbox' || inputType === 'radio') {
+        element.checked = value === 'true' || value === '1' || value.toLowerCase() === 'yes';
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+      } else if(inputType === 'file') {
+        return;
       } else {
-        element.value = '';
-        element.value = value;
+        fillInputElement(element, value);
       }
+    } else if(element instanceof HTMLTextAreaElement) {
+      fillInputElement(element, value);
     }
-    else if( element instanceof HTMLTextAreaElement){
-      element.value = '';
-      element.value = value;
-    }
-    
-    // Trigger all events to ensure frameworks detect the change
-    element.dispatchEvent(new Event('input', { bubbles: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true }));
+
     element.dispatchEvent(new Event('blur', { bubbles: true }));
-    
-    // Force visual update after setting value
-    forceVisualUpdate(element);
-    
-    // For React compatibility
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype,
-      'value'
-    )?.set;
-    
-    if (nativeInputValueSetter && element instanceof HTMLInputElement) {
-      nativeInputValueSetter.call(element, value);
-      element.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    
-    // Force re-render by triggering additional events
-    element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
-    element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-    element.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true }));
-    
-    // Additional methods for better compatibility
-    if (element instanceof HTMLInputElement) {
-      // Try setAttribute as well
-      element.setAttribute('value', value);
-      
-      // Force visual update by temporarily changing and restoring focus
-      element.blur();
-      element.focus();
-      element.blur();
-      
-      // For React/Vue/Angular compatibility - trigger more events
-      const events = ['focus', 'input', 'change', 'blur', 'keyup', 'keydown', 'keypress'];
-      events.forEach(eventType => {
-        element.dispatchEvent(new Event(eventType, { bubbles: true, cancelable: true }));
-      });
-      
-      // Try using Object.defineProperty for more reliable value setting
-      try {
-        Object.defineProperty(element, 'value', {
-          value: value,
-          writable: true,
-          enumerable: true,
-          configurable: true
-        });
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-      } catch (error) {
-        console.error('Object.defineProperty failed, using standard method');
-      }
-      
-      // Force visual update by manipulating the element's style temporarily
-      const originalDisplay = element.style.display;
-      element.style.display = 'none';
-      element.offsetHeight; // Force reflow
-      element.style.display = originalDisplay;
-      
-      // Try setting the value multiple times with different methods
-      setTimeout(() => {
-        element.value = value;
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-      }, 10);
-      
-      // For text inputs, try simulating typing
-      if (element.type === 'text' || element.type === 'email' || element.type === 'password' || !element.type) {
-        // Clear the field first
-        element.value = '';
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        
-        // Simulate typing character by character
-        for (let i = 0; i < value.length; i++) {
-          element.value += value[i];
-          element.dispatchEvent(new Event('input', { bubbles: true }));
-          element.dispatchEvent(new KeyboardEvent('keydown', { key: value[i], bubbles: true }));
-          element.dispatchEvent(new KeyboardEvent('keyup', { key: value[i], bubbles: true }));
-        }
-        
-        // Final events
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-        element.dispatchEvent(new Event('blur', { bubbles: true }));
-      }
-      
-      // Try alternative approach for stubborn frameworks
-      setTimeout(() => {
-        // Method 1: Direct property manipulation
-        try {
-          Object.getOwnPropertyDescriptor(element, 'value')?.set?.call(element, value);
-        } catch (e) {
-          console.error('Direct property manipulation failed');
-        }
-        
-        // Method 2: Try setting innerHTML for some custom inputs
-        if (element.hasAttribute('contenteditable') || element.getAttribute('role') === 'textbox') {
-          element.innerHTML = value;
-        }
-        
-        // Method 3: Try using the element's setter if it exists
-        if ('setValue' in element && typeof element.setValue === 'function') {
-          (element as any).setValue(value);
-        }
-        
-        // Method 4: Try triggering all possible events
-        const allEvents = ['input', 'change', 'blur', 'focus', 'keyup', 'keydown', 'keypress', 'paste', 'cut'];
-        allEvents.forEach(eventType => {
-          element.dispatchEvent(new Event(eventType, { bubbles: true, cancelable: true }));
-        });
-        
-        // Method 5: Force a complete re-render
-        forceVisualUpdate(element);
-      }, 100);
-    }
-    
-    // For select elements, also try setting selectedIndex
-    if (element instanceof HTMLSelectElement) {
-      const options = Array.from(element.options);
-      const matchingIndex = options.findIndex(opt => 
-        opt.value === value || opt.text === value
-      );
-      if (matchingIndex !== -1) {
-        element.selectedIndex = matchingIndex;
-        
-        // Force visual update for select elements
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        
-        // Try clicking the option to trigger visual update
-        const selectedOption = options[matchingIndex];
-        if (selectedOption) {
-          selectedOption.selected = true;
-          selectedOption.dispatchEvent(new Event('click', { bubbles: true }));
-        }
-      }
-    }
-    
-    // Final visual update attempt - force a complete re-render
-    setTimeout(() => {
-      // Trigger a custom event that might be listened to by frameworks
-      element.dispatchEvent(new CustomEvent('formai:fill', { 
-        detail: { value }, 
-        bubbles: true 
-      }));
-      
-      // Force a style recalculation
-      element.style.transform = 'translateZ(0)';
-      element.offsetHeight; // Force reflow
-      element.style.transform = '';
-      
-      // Try one more time with the value
-      if (element instanceof HTMLInputElement) {
-        element.value = value;
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    
-    }, 50);
-    
-  } catch (error) {
+  } catch(error) {
     console.error('Error in fillElement:', error);
-    console.error('Element details:', {
-      tagName: element.tagName,
-      type: element.type,
-      id: element.id,
-      name: element.name,
-      className: element.className
-    });
   }
+}
+
+// Inject loading/status CSS into the page
+function injectStyles(): void {
+  if(document.getElementById('formai-styles')) return;
+
+  const style = document.createElement('style');
+  style.id = 'formai-styles';
+  style.textContent = `
+    @keyframes formai-pulse {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.4); }
+      50% { box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2); }
+    }
+    .formai-loading {
+      animation: formai-pulse 1.5s ease-in-out infinite !important;
+      outline: 2px solid #667eea !important;
+      outline-offset: 1px;
+    }
+    .formai-success {
+      outline: 2px solid #22c55e !important;
+      outline-offset: 1px;
+      transition: outline-color 0.3s ease;
+    }
+    .formai-error {
+      outline: 2px solid #ef4444 !important;
+      outline-offset: 1px;
+      transition: outline-color 0.3s ease;
+    }
+    .formai-status-bar {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      background: #1a1a2e;
+      color: #e4e4e7;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      z-index: 2147483647;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .formai-status-bar:hover {
+      background: #252538;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function setFieldState(element: HTMLElement, state: 'loading' | 'success' | 'error' | 'none'): void {
+  element.classList.remove('formai-loading', 'formai-success', 'formai-error');
+  if(state !== 'none') {
+    element.classList.add(`formai-${state}`);
+  }
+
+  // Auto-clear success/error visual states after 3 seconds
+  if(state === 'success' || state === 'error') {
+    setTimeout(() => {
+      element.classList.remove(`formai-${state}`);
+    }, 3000);
+  }
+}
+
+function showStatusBar(message: string): void {
+  let bar = document.getElementById('formai-status-bar');
+  if(!bar) {
+    bar = document.createElement('div');
+    bar.id = 'formai-status-bar';
+    bar.className = 'formai-status-bar';
+    bar.addEventListener('click', () => bar?.remove());
+    document.body.appendChild(bar);
+  }
+  bar.textContent = message;
+
+  setTimeout(() => bar?.remove(), 5000);
 }
 
 async function askLLM(label: string): Promise<string> {
@@ -289,129 +246,97 @@ async function askLLM(label: string): Promise<string> {
     type: 'askLLM',
     data: { label }
   });
+
+  if(!answer.status) {
+    throw new Error(answer.error || 'LLM request failed');
+  }
+
   return answer.response ? answer.response.trim() : '';
 }
 
-
 async function handleClick(e: MouseEvent) {
+  if(!isPickerActive) return;
+
+  const clickedElement = e.target as HTMLElement;
+  const tagName = clickedElement.tagName.toLowerCase();
+
+  if(tagName !== 'input' && tagName !== 'select' && tagName !== 'textarea') return;
+
+  const formElement = clickedElement as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+  const label = findNearestLabel(formElement);
+
+  if(!label) {
+    showStatusBar('FormAI: Could not identify this field');
+    return;
+  }
+
+  // Show loading state on the field
+  setFieldState(clickedElement, 'loading');
+
   try {
-    if (!isPickerActive) {
-      return;
+    const answer = await askLLM(label);
+
+    if(answer && answer.length && answer !== 'null') {
+      fillElement(formElement, answer);
+      setFieldState(clickedElement, 'success');
+    } else {
+      // Skip the field instead of filling "NA"
+      setFieldState(clickedElement, 'error');
+      showStatusBar(`FormAI: Could not fill "${label}" - no matching data`);
     }
-    
-    const clickedElement = e.target as HTMLElement;
-    
-    if(clickedElement.tagName.toLowerCase() === 'input' || clickedElement.tagName.toLowerCase() === 'select' || clickedElement.tagName.toLowerCase() === 'textarea'){
-      const label = findNearestLabel(clickedElement as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement);
-      if(!label) {
-        console.warn('No label found for element');
-        return;
-      }
-    
-      // Don't prevent default for form elements to allow natural behavior
-      // e.preventDefault();
-      // e.stopPropagation();
-      
-      try {
-        const answer = await askLLM(label.innerText);
-        
-        if(answer && answer.length && answer != 'null'){
-          fillElement(clickedElement as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, answer);
-        }
-        else{
-          fillElement(clickedElement as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, 'NA');
-        }
-      } catch (error) {
-        console.error('Error asking LLM:', error);
-        fillElement(clickedElement as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, 'Error');
-      }
-    }
-    else{
-      return;
-    }
-  } catch (error) {
-    console.error('Error in handleClick:', error);
+  } catch(_error) {
+    // Skip the field instead of filling "Error"
+    setFieldState(clickedElement, 'error');
+    showStatusBar('FormAI: Failed to get AI response');
   }
 }
 
 function startElementPicker() {
   isPickerActive = true;
-  chrome.storage.local.set({
-    picker: true
-  });
-  document.body.style.cursor = 'pointer';
-  
-  // Apply cursor to all iframes
-  const iframes = document.querySelectorAll('iframe');
-  iframes.forEach((iframe) => {
-    try {
-      if (iframe.contentDocument) {
-        iframe.contentDocument.body.style.cursor = 'pointer';
-        iframe.contentDocument.addEventListener('click', handleClick, true);
-      }
-    } catch (e) {
-      console.warn('Cannot access iframe:', e);
-    }
-  });
-  
+  injectStyles();
+  chrome.storage.local.set({ picker: true });
+  document.body.style.cursor = 'crosshair';
   document.addEventListener('click', handleClick, true);
 }
 
 function stopElementPicker() {
   isPickerActive = false;
-  chrome.storage.local.set({
-    picker: false
-  });
+  chrome.storage.local.set({ picker: false });
   document.body.style.cursor = '';
-  
-  // Reset cursor in all iframes
-  const iframes = document.querySelectorAll('iframe');
-  iframes.forEach((iframe) => {
-    try {
-      if (iframe.contentDocument) {
-        iframe.contentDocument.body.style.cursor = '';
-        iframe.contentDocument.removeEventListener('click', handleClick, true);
-      }
-    } catch (e) {
-      console.warn('Cannot access iframe:', e);
-    }
-  });
-  
   document.removeEventListener('click', handleClick, true);
 }
 
-// Example: Listen for messages from background script
-chrome.runtime.onMessage.addListener(async (request, _sender, sendResponse) => {
-
-  switch(request.type){
-
+// Listen for messages from background script
+chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+  switch(request.type) {
     case 'START_PICKER':
       startElementPicker();
+      sendResponse({ status: true });
       break;
-
     case 'STOP_PICKER':
       stopElementPicker();
+      sendResponse({ status: true });
       break;
-
     default:
       sendResponse({ status: false, error: 'No type matched' });
   }
   return true;
 });
 
-// You can manipulate the DOM here
-// Example: Add a custom element to the page
+// Initialize picker state from storage
 const initContentScript = () => {
   chrome.storage.local.get(['picker'], (result) => {
-    if(result.picker !== undefined){
-      isPickerActive = result.picker;
+    if(result.picker) {
+      isPickerActive = true;
+      injectStyles();
+      document.body.style.cursor = 'crosshair';
+      document.addEventListener('click', handleClick, true);
     }
   });
-}
+};
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initContentScript)
+if(document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initContentScript);
 } else {
-  initContentScript()
+  initContentScript();
 }
-

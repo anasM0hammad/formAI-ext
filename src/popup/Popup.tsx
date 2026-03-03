@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ToastContainer, toast } from 'react-toastify';
-import { fetchModelList } from './utils';
-import { deleteVector, insert, query } from '../embeddings';
 
 const MAIN_TAB = 'General';
 const DATA_TAB = 'Data';
@@ -11,28 +9,16 @@ const OLLAMA = 'Ollama';
 const OPENAI = 'OpenAI';
 const GEMINI = 'Gemini';
 
-const AUTO_FILL = 'autoFill';
-const SMART_DETECT = 'smartDetect';
-const AUTO_SUBMIT = 'autoSubmit';
-
-type Options = {
-  autoFill: boolean,
-  smartDetect: boolean,
-  autoSubmit: boolean,
-}
-
 type NotificationProp = {
   message: string,
   type?: 'success' | 'error' | 'warning',
 }
 
-type Providers = `${typeof OLLAMA}` | `${typeof GEMINI}` | `${typeof OPENAI}` | ``;
-
-type OptionValues = `${typeof AUTO_FILL}` | `${typeof SMART_DETECT}` | `${typeof AUTO_SUBMIT}`;
+type Providers = typeof OLLAMA | typeof GEMINI | typeof OPENAI | '';
 
 function Notification(props: NotificationProp) {
   const type = props.type || 'success';
-  
+
   return (
     <div className={`notification notification-${type}`}>
       <div className="notification-icon">
@@ -70,108 +56,94 @@ function Popup() {
   const [provider, setProvider] = useState<Providers>('');
   const [apiKey, setAPIKey] = useState<string>('');
   const [url, setUrl] = useState<string>('http://localhost:11434/v1');
-  const [options, setOptions] = useState<Options>({ [AUTO_FILL]: false, [SMART_DETECT]: true, [AUTO_SUBMIT]: false});
   const [modelList, setModelList] = useState<string[]>([]);
   const [notification, setNotification] = useState<string>('');
   const [notificationType, setNotificationType] = useState<'success' | 'error' | 'warning'>('success');
   const dataRef = useRef<HTMLTextAreaElement>(null);
   const [picker, setPicker] = useState<boolean>(false);
+  const fetchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
-    // Load saved theme from storage
-
-    chrome.storage.sync.get(['theme', 'options'], (result) => {
-      if (result.theme) {
-        setTheme(result.theme)
-      }
-
-      if(result.options){
-        setOptions(result.options);
+    chrome.storage.sync.get(['theme'], (result) => {
+      if(result.theme) {
+        setTheme(result.theme);
       }
     });
 
-    // Listen for messages from background script
-    chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-      if (request.type === 'queryEmbeddings') {
-        query(request.data)
-          .then(embeddings => {
-            sendResponse({ status: true, data: embeddings });
-          })
-          .catch(error => {
-            sendResponse({ status: false, error: error.message });
-          });
-        return true;
-      }
-      return true; // Keep the message channel open for async response
-    });
-
-    chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'agentQLKey', 'options', 'picker'], async (result) => {
-      if(result.provider){
+    chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'picker'], async (result) => {
+      if(result.provider) {
         setProvider(result.provider);
       }
 
-      if(result.picker !== undefined){
+      if(result.picker !== undefined) {
         setPicker(result.picker);
       }
 
-      if(result.apiKey){
-        try{
+      if(result.apiKey) {
+        try {
           const response = await chrome.runtime.sendMessage({
             type: 'decrypt',
             data: result.apiKey
           });
 
-          if(response.status){
+          if(response.status) {
             setAPIKey(response.decrypted);
           }
-        }
-        catch(error: any){
-          const id = setTimeout(() => {
-            resetNotification()
-          }, 2000) as unknown as number;
-          createNotification(`API key can't be fetched` + error.message, id, 'error');
+        } catch(error: any) {
+          toast.error(`API key can't be fetched: ${error.message}`);
         }
       }
 
-      if(result.model){
+      if(result.model) {
         setModel(result.model);
       }
 
-      if(result.url){
+      if(result.url) {
         setUrl(result.url);
       }
     });
 
     return () => {
       clearTimeout(notificationId);
+      clearTimeout(fetchDebounceRef.current);
     }
   }, []);
 
   const addData = async () => {
     const data = dataRef.current;
 
-    if(!data?.value){
+    if(!data?.value) {
       toast.warning('Empty field');
       return;
     }
 
-    try{
-      await insert(data.value);
-      data.value = '';
-      toast.success(`Added successfully`);
-    }
-    catch(error: any){
-      toast.error(`Failed ${error.message}`);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'store',
+        data: data.value
+      });
+
+      if(response.status) {
+        data.value = '';
+        toast.success('Added successfully');
+      } else {
+        toast.error(`Failed: ${response.error}`);
+      }
+    } catch(error: any) {
+      toast.error(`Failed: ${error.message}`);
     }
   };
 
   const resetDatabase = async () => {
-    try{
-      await deleteVector();
-      toast.success(`Deleted successfully`);
-    }
-    catch(error: any){
-      toast.error(`Failed ${error.message}`);
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'reset' });
+      if(response.status) {
+        toast.success('Deleted successfully');
+      } else {
+        toast.error(`Failed: ${response.error}`);
+      }
+    } catch(error: any) {
+      toast.error(`Failed: ${error.message}`);
     }
   }
 
@@ -187,37 +159,43 @@ function Popup() {
     setNotificationType(type);
   }
 
-  const fetchModels = async (provider: Providers, apiKey?: string, url?: string) => {
-    if(provider === OLLAMA){
-      if(url){
-        try{
-          const models = await fetchModelList(provider, undefined, url);
-          setModelList(models);
-        }
-        catch(error: any){
-          setModelList([]);
-          toast.error(error.message);
-        }
-      }
+  const fetchModels = async (prov: Providers, key?: string, localUrl?: string) => {
+    if(prov === OLLAMA) {
+      if(!localUrl) return;
+    } else if(prov) {
+      if(!key) return;
+    } else {
+      return;
     }
-    else if(provider){
-      if(apiKey){
-         try{
-          const models = await fetchModelList(provider, apiKey);
-          setModelList(models);
-        }
-        catch(error: any){
-          setModelList([]);
-          toast.error(error.message);
-        }
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'fetchModels',
+        data: { provider: prov, apiKey: key, url: localUrl }
+      });
+
+      if(response.status) {
+        setModelList(response.models);
+      } else {
+        setModelList([]);
+        toast.error(response.error);
       }
+    } catch(error: any) {
+      setModelList([]);
+      toast.error(error.message);
     }
+  }
+
+  const debouncedFetchModels = (prov: Providers, key?: string, localUrl?: string) => {
+    clearTimeout(fetchDebounceRef.current);
+    fetchDebounceRef.current = setTimeout(() => {
+      fetchModels(prov, key, localUrl);
+    }, 500);
   }
 
   const toggleTheme = () => {
     const newTheme = theme === 'light' ? 'dark' : 'light'
     setTheme(newTheme)
-    // Save theme to storage
     chrome.storage.sync.set({ theme: newTheme })
   };
 
@@ -233,13 +211,13 @@ function Popup() {
       return;
     }
 
-    try{
+    try {
       const response = await chrome.runtime.sendMessage({
         type: 'encrypt',
         data: apiKey,
       });
-    
-      if(!response.status){
+
+      if(!response.status) {
         const id = setTimeout(() => {
           resetNotification();
         }, 2000) as unknown as number;
@@ -253,13 +231,12 @@ function Popup() {
         model,
         url
       });
-    
+
       const id = setTimeout(() => {
         resetNotification();
       }, 2000) as unknown as number;
       createNotification('Configuration saved successfully', id);
-    }
-    catch(error: any){
+    } catch(error: any) {
       const id = setTimeout(() => {
          resetNotification()
       }, 2000) as unknown as number;
@@ -279,49 +256,45 @@ function Popup() {
 
   const selectKey = (event: React.ChangeEvent<HTMLInputElement>) => {
     setAPIKey(event.target.value);
-    fetchModels(provider, event.target.value, url);
+    debouncedFetchModels(provider, event.target.value, url);
   }
 
   const selectUrl = (event: React.ChangeEvent<HTMLInputElement>) => {
     setUrl(event.target.value);
-    setAPIKey('dummy');
-    fetchModels(provider, apiKey, event.target.value);
-  }
-
-  const toggleOptions = (title: OptionValues, event: React.ChangeEvent<HTMLInputElement>) => {
-     const newOpt = {...options};
-     newOpt[title] = event.target.checked;
-     chrome.storage.sync.set({options: newOpt});
-     setOptions(newOpt);
+    debouncedFetchModels(provider, 'dummy', event.target.value);
   }
 
   const onFillForm = async () => {
-    if(!provider){
+    if(!provider) {
       toast.error('Please select the provider');
       return;
     }
 
-    if(!model){
+    if(!model) {
       toast.error('Please select the model');
       return;
     }
 
-    if(provider !== OLLAMA && !apiKey){
+    if(provider !== OLLAMA && !apiKey) {
       toast.error('API key is not set');
       return;
     }
 
-    try{
+    try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    
-      if (tab.id) {
+
+      if(tab.id) {
+        // Programmatically inject content script
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content/index.js']
+        });
+
         await chrome.tabs.sendMessage(tab.id, { type: picker ? 'STOP_PICKER' : 'START_PICKER' });
       }
       setPicker(!picker);
-      // window.close();
-    }
-    catch(error: any){
-      console.error(error.message);
+    } catch(error: any) {
+      toast.error('Failed to activate on this page. Make sure the page is fully loaded.');
     }
   }
 
@@ -351,7 +324,7 @@ function Popup() {
           )}
         </button>
       </div>
-      
+
       <div className="tabs">
         <button
           className={`tab ${activeTab === MAIN_TAB ? 'active' : ''}`}
@@ -371,7 +344,6 @@ function Popup() {
         >
           {CONFIG}
         </button>
-
       </div>
 
         <div className="tab-content">
@@ -379,7 +351,7 @@ function Popup() {
             <>
               <div className="general-section">
                 <h2 className="section-title">Current Configuration</h2>
-                
+
                 {provider ? (
                   <div className="provider-display">
                     <div className="provider-info">
@@ -419,45 +391,6 @@ function Popup() {
                     <p>No configuration found. Please set up your provider in Settings.</p>
                   </div>
                 )}
-              </div>
-
-              <div className="general-section">
-                {/* <h2 className="section-title">Options</h2> */}
-                
-                <div className="toggle-group">
-                  <div className="toggle-item">
-                    <div className="toggle-info">
-                      <span className="toggle-label">Auto-fill on page load</span>
-                      <span className="toggle-description">Automatically fill forms when page loads</span>
-                    </div>
-                    <label className="toggle-switch">
-                      <input type="checkbox" checked={options[AUTO_FILL]} onChange={toggleOptions.bind(undefined, AUTO_FILL)} />
-                      <span className="toggle-slider"></span>
-                    </label>
-                  </div>
-
-                  <div className="toggle-item">
-                    <div className="toggle-info">
-                      <span className="toggle-label">Smart detection</span>
-                      <span className="toggle-description">Detect and suggest form field values</span>
-                    </div>
-                    <label className="toggle-switch">
-                      <input type="checkbox" checked={options[SMART_DETECT]} onChange={toggleOptions.bind(undefined, SMART_DETECT)}/>
-                      <span className="toggle-slider"></span>
-                    </label>
-                  </div>
-
-                  <div className="toggle-item">
-                    <div className="toggle-info">
-                      <span className="toggle-label">Auto Submit</span>
-                      <span className="toggle-description">Submit the form when filled</span>
-                    </div>
-                    <label className="toggle-switch">
-                      <input type="checkbox" checked={options[AUTO_SUBMIT]} onChange={toggleOptions.bind(undefined, AUTO_SUBMIT)}/>
-                      <span className="toggle-slider" ></span>
-                    </label>
-                  </div>
-                </div>
               </div>
               <div className="form-group">
                 <button className='button' onClick={onFillForm}>{picker ? `Remove Select` : `Select`}</button>
@@ -509,7 +442,7 @@ function Popup() {
                 <label>LLM Model</label>
                 <input className='form-control' onChange={selectModel} value={model} list='modelList'/>
                 <datalist id="modelList">
-                  { modelList.map((model) => <option value={model}>{model}</option>) } 
+                  { modelList.map((m) => <option key={m} value={m}>{m}</option>) }
                 </datalist>
               </div>
             }
@@ -529,4 +462,3 @@ function Popup() {
 }
 
 export default Popup
-
