@@ -94,6 +94,7 @@ function OnboardingWizard({ theme, onComplete }: { theme: 'light' | 'dark', onCo
   const [url, setUrl] = useState('http://localhost:11434/v1');
   const [model, setModel] = useState('');
   const [modelList, setModelList] = useState<string[]>([]);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [userData, setUserData] = useState<UserData>({ ...emptyUserData });
   const fetchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -106,19 +107,36 @@ function OnboardingWizard({ theme, onComplete }: { theme: 'light' | 'dark', onCo
       return;
     }
 
+    setIsFetchingModels(true);
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'fetchModels',
         data: { provider: prov, apiKey: key, url: localUrl }
       });
-      if(response.status) setModelList(response.models);
-    } catch { /* ignore */ }
+      if(response.status) {
+        setModelList(response.models || []);
+        if(!response.models?.length) {
+          toast.warning('No models returned. You can type a model name manually.');
+        }
+      } else {
+        setModelList([]);
+        toast.error(response.error || 'Failed to fetch models. You can type a model name manually.');
+      }
+    } catch(error: any) {
+      setModelList([]);
+      toast.error('Could not connect to provider. You can type a model name manually.');
+    } finally {
+      setIsFetchingModels(false);
+    }
   };
 
   const debouncedFetchModels = (prov: Providers, key?: string, localUrl?: string) => {
     clearTimeout(fetchDebounceRef.current);
     fetchDebounceRef.current = setTimeout(() => fetchModels(prov, key, localUrl), 500);
   };
+
+  // Show model field once provider is selected and credentials are provided
+  const showModelField = provider === OLLAMA || (provider && apiKey.length > 0);
 
   const saveStep1 = async () => {
     if(!provider) { toast.error('Please select a provider'); return; }
@@ -199,14 +217,17 @@ function OnboardingWizard({ theme, onComplete }: { theme: 'light' | 'dark', onCo
               </div>
             )}
 
-            {(modelList.length > 0 || model) && (
+            {showModelField && (
               <div className="form-group">
-                <label>Model</label>
-                <input className="form-control" value={model} list="onboarding-models" placeholder="Select or type a model"
+                <label>Model {isFetchingModels && <span className="fetch-status">Loading models...</span>}</label>
+                <input className="form-control" value={model} list="onboarding-models"
+                  placeholder={isFetchingModels ? 'Loading models...' : 'Select or type a model name'}
                   onChange={e => setModel(e.target.value)} />
-                <datalist id="onboarding-models">
-                  {modelList.map(m => <option key={m} value={m}>{m}</option>)}
-                </datalist>
+                {modelList.length > 0 && (
+                  <datalist id="onboarding-models">
+                    {modelList.map(m => <option key={m} value={m}>{m}</option>)}
+                  </datalist>
+                )}
               </div>
             )}
 
@@ -990,7 +1011,7 @@ function Popup() {
                 <option value={OLLAMA}>{OLLAMA}</option>
               </select>
             </div>
-            {provider !== OLLAMA && (
+            {provider && provider !== OLLAMA && (
               <div className="form-group">
                 <label>API Key</label>
                 <input type="password" className='form-control' onChange={selectKey} value={apiKey} />
@@ -1002,13 +1023,16 @@ function Popup() {
                 <input className='form-control' onChange={selectUrl} value={url} />
               </div>
             )}
-            {(modelList.length !== 0 || model) && (
+            {provider && (
               <div className="form-group">
                 <label>LLM Model</label>
-                <input className='form-control' onChange={selectModel} value={model} list='modelList' />
-                <datalist id="modelList">
-                  {modelList.map((m) => <option key={m} value={m}>{m}</option>)}
-                </datalist>
+                <input className='form-control' onChange={selectModel} value={model} list='modelList'
+                  placeholder="Select or type a model name" />
+                {modelList.length > 0 && (
+                  <datalist id="modelList">
+                    {modelList.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </datalist>
+                )}
               </div>
             )}
             <div className='disclaimer'>
