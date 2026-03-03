@@ -88,15 +88,38 @@ function Notification(props: NotificationProp) {
 // --- Onboarding Wizard (F-018) ---
 
 function OnboardingWizard({ theme, onComplete }: { theme: 'light' | 'dark', onComplete: () => void }) {
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(0); // 0 = loading, 1/2/3 = wizard steps
   const [provider, setProvider] = useState<Providers>('');
   const [apiKey, setAPIKey] = useState('');
   const [url, setUrl] = useState('http://localhost:11434/v1');
   const [model, setModel] = useState('');
   const [modelList, setModelList] = useState<string[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [userData, setUserData] = useState<UserData>({ ...emptyUserData });
   const fetchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // On mount: check if step 1 was already completed (user closed popup mid-onboarding)
+  useEffect(() => {
+    chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'userData'], async (result) => {
+      if(result.provider && result.model) {
+        // Step 1 was completed — restore state and go to step 2
+        setProvider(result.provider);
+        setModel(result.model);
+        if(result.url) setUrl(result.url);
+        if(result.userData) setUserData(result.userData);
+        if(result.apiKey) {
+          try {
+            const response = await chrome.runtime.sendMessage({ type: 'decrypt', data: result.apiKey });
+            if(response?.status) setAPIKey(response.decrypted);
+          } catch { /* ignore */ }
+        }
+        setStep(2);
+      } else {
+        setStep(1);
+      }
+    });
+  }, []);
 
   const fetchModels = async (prov: Providers, key?: string, localUrl?: string) => {
     if(prov === OLLAMA) {
@@ -155,15 +178,18 @@ function OnboardingWizard({ theme, onComplete }: { theme: 'light' | 'dark', onCo
   };
 
   const saveStep2 = async () => {
+    setIsSaving(true);
     try {
       const response = await chrome.runtime.sendMessage({ type: 'saveUserData', data: userData });
       if(response.status) {
         setStep(3);
       } else {
-        toast.error(response.error);
+        toast.error(response.error || 'Failed to save data');
       }
     } catch(error: any) {
-      toast.error(error.message);
+      toast.error(error.message || 'Failed to save data');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -179,9 +205,13 @@ function OnboardingWizard({ theme, onComplete }: { theme: 'light' | 'dark', onCo
       </div>
 
       <div className="tab-content">
-        <div className="onboarding-step-indicator">
-          Step {step} of 3
-        </div>
+        {step === 0 && <p>Loading...</p>}
+
+        {step > 0 && (
+          <div className="onboarding-step-indicator">
+            Step {step} of 3
+          </div>
+        )}
 
         {step === 1 && (
           <div className="onboarding-content">
@@ -269,9 +299,11 @@ function OnboardingWizard({ theme, onComplete }: { theme: 'light' | 'dark', onCo
             </div>
 
             <div className="onboarding-actions">
-              <button className="button-secondary" onClick={() => setStep(1)}>Back</button>
-              <button className="button-secondary" onClick={() => setStep(3)}>Skip</button>
-              <button className="button-primary" onClick={saveStep2}>Next</button>
+              <button className="button-secondary" onClick={() => setStep(1)} disabled={isSaving}>Back</button>
+              <button className="button-secondary" onClick={() => setStep(3)} disabled={isSaving}>Skip</button>
+              <button className="button-primary" onClick={saveStep2} disabled={isSaving}>
+                {isSaving ? 'Saving...' : 'Next'}
+              </button>
             </div>
           </div>
         )}

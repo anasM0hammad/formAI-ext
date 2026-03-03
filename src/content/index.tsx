@@ -738,6 +738,7 @@ async function handleFillAll(): Promise<void> {
 
   if(fields.length === 0) {
     showStatusBar('FormAI: No fillable fields found on this page');
+    isFilling = false;
     return;
   }
 
