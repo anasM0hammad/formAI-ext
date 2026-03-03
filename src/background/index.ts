@@ -55,13 +55,22 @@ async function getLLMClient(): Promise<{ client: OpenAI, model: string }> {
   const config: Record<string, string> = {};
 
   if(provider === 'Ollama') {
+    if(!url) {
+      throw { errorType: 'PROVIDER_NOT_SET' as ErrorType, message: 'Ollama URL not configured. Set it in Settings.' };
+    }
     config['apiKey'] = 'dummy';
     config['baseURL'] = url;
   } else if(provider === 'Gemini') {
+    if(!storageResponse.apiKey) {
+      throw { errorType: 'API_KEY_INVALID' as ErrorType, message: 'API key not found. Please add your key in Settings.' };
+    }
     const apiKey = await decryption(storageResponse.apiKey);
     config['apiKey'] = apiKey;
     config['baseURL'] = `https://generativelanguage.googleapis.com/v1beta/openai/`;
   } else {
+    if(!storageResponse.apiKey) {
+      throw { errorType: 'API_KEY_INVALID' as ErrorType, message: 'API key not found. Please add your key in Settings.' };
+    }
     const apiKey = await decryption(storageResponse.apiKey);
     config['apiKey'] = apiKey;
   }
@@ -84,6 +93,16 @@ function classifyAPIError(error: any): { errorType: ErrorType, message: string }
     return { errorType: 'NETWORK', message: 'Network error. Please check your connection and try again.' };
   }
   return { errorType: 'NETWORK', message: error?.message || 'Unknown error occurred' };
+}
+
+// --- LLM Response Helper ---
+
+function extractLLMContent(response: any): string {
+  const content = response?.choices?.[0]?.message?.content;
+  if(content === undefined || content === null) {
+    throw { errorType: 'NETWORK' as ErrorType, message: 'Received an empty response from the AI model. Please try again.' };
+  }
+  return content;
 }
 
 // --- Direct Field Matching (F-013) ---
@@ -152,7 +171,7 @@ const askLLM = async (label: string) => {
         { role: 'user', content: `Context: ${context} \n Answer the form field : ${label} for me`}
       ]
     });
-    return response.choices[0].message.content;
+    return extractLLMContent(response);
   } catch(error: any) {
     if(error.errorType) throw error;
     throw classifyAPIError(error);
@@ -217,7 +236,7 @@ Return only the JSON object, no other text.`;
       ]
     });
 
-    const content = response.choices[0].message.content || '';
+    const content = extractLLMContent(response);
     const parsed = parseJSON(content);
 
     if(!parsed) {
@@ -293,7 +312,7 @@ Return only the JSON object.`;
       ]
     });
 
-    const content = response.choices[0].message.content || '';
+    const content = extractLLMContent(response);
     const parsed = parseJSON(content);
 
     if(!parsed) {
@@ -385,7 +404,7 @@ Generate the cover letter now.`;
         { role: 'user', content: prompt }
       ]
     });
-    return response.choices[0].message.content || '';
+    return extractLLMContent(response);
   } catch(error: any) {
     if(error.errorType) throw error;
     throw classifyAPIError(error);
@@ -489,7 +508,7 @@ const fetchModels = async (provider: string, apiKey?: string, url?: string) => {
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   if(details.reason === 'install') {
-    chrome.storage.sync.set({ initialized: true });
+    await chrome.storage.sync.set({ initialized: true });
 
     const value = crypto.getRandomValues(new Uint8Array(32));
     await chrome.storage.local.set({
@@ -536,12 +555,6 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         .catch(handleError);
       break;
 
-    case 'store':
-      insert(request.data)
-        .then(() => sendResponse({ status: true, message: 'Data stored successfully' }))
-        .catch(handleError);
-      break;
-
     case 'saveUserData':
       saveUserData(request.data)
         .then(() => sendResponse({ status: true, message: 'User data saved' }))
@@ -550,8 +563,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
 
     case 'reset':
       deleteVector()
-        .then(() => {
-          chrome.storage.local.remove('userData');
+        .then(async () => {
+          await chrome.storage.local.remove(['userData', 'fillHistory']);
           sendResponse({ status: true, message: 'All data reset' });
         })
         .catch(handleError);

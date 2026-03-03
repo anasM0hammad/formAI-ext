@@ -1,3 +1,9 @@
+// Guard against double-injection when content script is re-injected
+if((window as any).__formaiInjected) {
+  // Script already loaded - skip re-initialization
+} else {
+(window as any).__formaiInjected = true;
+
 let isPickerActive = false;
 
 // --- Types ---
@@ -82,7 +88,7 @@ const PLATFORM_TEMPLATES: PlatformTemplate[] = [
 function getTemplateForCurrentSite(): PlatformTemplate | null {
   const hostname = window.location.hostname;
   return PLATFORM_TEMPLATES.find(t =>
-    t.domains.some(d => hostname.includes(d))
+    t.domains.some(d => hostname === d || hostname.endsWith('.' + d))
   ) || null;
 }
 
@@ -108,8 +114,10 @@ function findNearestLabel(inputElement: HTMLInputElement | HTMLSelectElement | H
   // 4. label[for] attribute
   const inputId = inputElement.id;
   if(inputId) {
-    const labelByFor = document.querySelector(`label[for="${inputId}"]`);
-    if(labelByFor?.textContent?.trim()) return labelByFor.textContent.trim();
+    try {
+      const labelByFor = document.querySelector(`label[for="${CSS.escape(inputId)}"]`);
+      if(labelByFor?.textContent?.trim()) return labelByFor.textContent.trim();
+    } catch { /* Malformed ID, skip */ }
   }
 
   // 5. Placeholder
@@ -181,7 +189,7 @@ function smartFieldDetection(element: HTMLInputElement | HTMLSelectElement | HTM
     if(/phone|tel|mobile/.test(id)) return 'Phone';
     if(/first.?name|fname/.test(id)) return 'First Name';
     if(/last.?name|lname|surname/.test(id)) return 'Last Name';
-    if(/name/.test(id) && !/company|user/.test(id)) return 'Full Name';
+    if(/\bname\b/.test(id) && !/company|user/.test(id)) return 'Full Name';
     if(/city/.test(id)) return 'City';
     if(/state|province/.test(id)) return 'State';
     if(/zip|postal/.test(id)) return 'Zip Code';
@@ -216,25 +224,45 @@ function smartFieldDetection(element: HTMLInputElement | HTMLSelectElement | HTM
 
 // --- Framework Detection ---
 
+let cachedFramework: 'react' | 'vue' | 'angular' | 'vanilla' | null = null;
+
 function detectFramework(): 'react' | 'vue' | 'angular' | 'vanilla' {
+  if(cachedFramework) return cachedFramework;
+
   const body = document.querySelector('body');
   if(!body) return 'vanilla';
 
-  if(document.querySelector('[data-reactroot]') ||
-     document.querySelector('[data-reactid]') ||
-     Object.keys(body).some(k => k.startsWith('__react'))) {
-    return 'react';
+  try {
+    if(document.querySelector('[data-reactroot]') ||
+       document.querySelector('[data-reactid]') ||
+       Object.keys(body).some(k => k.startsWith('__react'))) {
+      cachedFramework = 'react';
+      return cachedFramework;
+    }
+
+    // Vue detection: check for __vue_app__ or attributes starting with data-v-
+    if((body as any).__vue_app__ ||
+       Array.from(document.querySelectorAll('*')).some(el =>
+         Array.from(el.attributes).some(attr => attr.name.startsWith('data-v-'))
+       )) {
+      cachedFramework = 'vue';
+      return cachedFramework;
+    }
+
+    // Angular detection: ng-version is reliable
+    if(document.querySelector('[ng-version]') ||
+       Array.from(document.querySelectorAll('*')).some(el =>
+         Array.from(el.attributes).some(attr => attr.name.startsWith('_nghost'))
+       )) {
+      cachedFramework = 'angular';
+      return cachedFramework;
+    }
+  } catch {
+    // Fallback if any selector query fails
   }
 
-  if(document.querySelector('[data-v-]') || (body as any).__vue_app__) {
-    return 'vue';
-  }
-
-  if(document.querySelector('[ng-version]') || document.querySelector('[_nghost]')) {
-    return 'angular';
-  }
-
-  return 'vanilla';
+  cachedFramework = 'vanilla';
+  return cachedFramework;
 }
 
 // --- Form Filling (F-003 Strategy Pattern) ---
@@ -289,7 +317,8 @@ function fillElement(element: HTMLInputElement | HTMLSelectElement | HTMLTextAre
     } else if(element instanceof HTMLInputElement) {
       const inputType = element.type.toLowerCase();
       if(inputType === 'checkbox' || inputType === 'radio') {
-        element.checked = value === 'true' || value === '1' || value.toLowerCase() === 'yes';
+        const lowerVal = value.toLowerCase();
+        element.checked = lowerVal === 'true' || lowerVal === '1' || lowerVal === 'yes';
         element.dispatchEvent(new Event('change', { bubbles: true }));
       } else if(inputType === 'file') {
         return;
@@ -516,11 +545,15 @@ function setFieldState(element: HTMLElement, state: 'loading' | 'success' | 'err
 }
 
 function addConfidenceIndicator(element: HTMLElement, confidence: 'direct' | 'llm' | 'failed'): void {
-  // Remove existing indicator
-  const existing = element.parentElement?.querySelector('.formai-indicator');
-  existing?.remove();
+  // Remove existing indicator for this element
+  const existingId = element.dataset.formaiIndicatorId;
+  if(existingId) {
+    document.getElementById(existingId)?.remove();
+  }
 
+  const indicatorId = `formai-ind-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   const indicator = document.createElement('span');
+  indicator.id = indicatorId;
   indicator.className = `formai-indicator formai-indicator-${confidence}`;
   indicator.textContent = confidence === 'direct' ? '\u2713' : confidence === 'llm' ? '\u25CB' : '\u2717';
 
@@ -530,6 +563,7 @@ function addConfidenceIndicator(element: HTMLElement, confidence: 'direct' | 'll
   indicator.style.top = `${window.scrollY + rect.top - 5}px`;
   indicator.style.left = `${window.scrollX + rect.right - 5}px`;
   document.body.appendChild(indicator);
+  element.dataset.formaiIndicatorId = indicatorId;
 }
 
 function showStatusBar(message: string, isError = false): void {
@@ -690,7 +724,15 @@ function scanFormFields(): { element: HTMLInputElement | HTMLSelectElement | HTM
   return fields;
 }
 
+let isFilling = false;
+
 async function handleFillAll(): Promise<void> {
+  if(isFilling) return;
+  isFilling = true;
+
+  // Clean up previous indicators
+  document.querySelectorAll('.formai-indicator').forEach(el => el.remove());
+
   injectStyles();
   const fields = scanFormFields();
 
@@ -719,22 +761,23 @@ async function handleFillAll(): Promise<void> {
       data: { fields: fieldRequests }
     });
 
-    if(!response.status) {
+    if(!response || !response.status) {
       fields.forEach(f => setFieldState(f.element, 'error'));
       panelItems.forEach(p => p.confidence = 'failed');
       updateFloatingPanel(panelItems);
-      showStatusBar(response.error || 'Failed to fill fields', true);
+      showStatusBar(response?.error || 'Failed to fill fields', true);
       return;
     }
 
-    const results: FieldResult[] = response.results;
+    const results: FieldResult[] = response.results || [];
 
     // Fill each field with results
     for(const result of results) {
-      const fieldData = fields.find(f => f.id === result.id);
-      if(!fieldData) continue;
+      const fieldIndex = fields.findIndex(f => f.id === result.id);
+      if(fieldIndex === -1) continue;
+      const fieldData = fields[fieldIndex];
 
-      const panelItem = panelItems.find(p => p.label === fieldData.label);
+      const panelItem = panelItems[fieldIndex];
 
       if(result.value && result.confidence !== 'failed') {
         fillElement(fieldData.element, result.value);
@@ -759,7 +802,7 @@ async function handleFillAll(): Promise<void> {
         fieldsTotal: fields.length,
         fieldsFilled: filledCount
       }
-    });
+    }).catch(() => { /* non-critical, ignore */ });
 
     // Enter picker mode for individual corrections
     startElementPicker();
@@ -768,7 +811,9 @@ async function handleFillAll(): Promise<void> {
     fields.forEach(f => setFieldState(f.element, 'error'));
     panelItems.forEach(p => p.confidence = 'failed');
     updateFloatingPanel(panelItems);
-    showStatusBar(error.message || 'Failed to fill fields', true);
+    showStatusBar(error?.message || 'Failed to fill fields', true);
+  } finally {
+    isFilling = false;
   }
 }
 
@@ -780,8 +825,8 @@ async function askLLM(label: string): Promise<string> {
     data: { label }
   });
 
-  if(!answer.status) {
-    throw new Error(answer.error || 'LLM request failed');
+  if(!answer || !answer.status) {
+    throw new Error(answer?.error || 'LLM request failed');
   }
 
   return answer.response ? answer.response.trim() : '';
@@ -846,10 +891,6 @@ function stopElementPicker() {
 
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   switch(request.type) {
-    case 'START_PICKER':
-      startElementPicker();
-      sendResponse({ status: true });
-      break;
     case 'STOP_PICKER':
       stopElementPicker();
       sendResponse({ status: true });
@@ -857,7 +898,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     case 'FILL_ALL':
       handleFillAll()
         .then(() => sendResponse({ status: true }))
-        .catch((err) => sendResponse({ status: false, error: err.message }));
+        .catch((err) => sendResponse({ status: false, error: err?.message || String(err) }));
       break;
     default:
       sendResponse({ status: false, error: 'No type matched' });
@@ -883,3 +924,5 @@ if(document.readyState === 'loading') {
 } else {
   initContentScript();
 }
+
+} // end double-injection guard

@@ -352,12 +352,18 @@ function Popup() {
   if(!onboardingComplete) {
     return <OnboardingWizard theme={theme} onComplete={() => {
       setOnboardingComplete(true);
-      // Reload config after onboarding
-      chrome.storage.local.get(['provider', 'model', 'url', 'userData'], (result) => {
+      // Reload config after onboarding (including API key)
+      chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'userData'], async (result) => {
         if(result.provider) setProvider(result.provider);
         if(result.model) setModel(result.model);
         if(result.url) setUrl(result.url);
         if(result.userData) setUserData(result.userData);
+        if(result.apiKey) {
+          try {
+            const response = await chrome.runtime.sendMessage({ type: 'decrypt', data: result.apiKey });
+            if(response?.status) setAPIKey(response.decrypted);
+          } catch { /* ignore */ }
+        }
       });
     }} />;
   }
@@ -378,6 +384,7 @@ function Popup() {
   };
 
   const resetAllData = async () => {
+    if(!confirm('This will delete all your data. Are you sure?')) return;
     try {
       const response = await chrome.runtime.sendMessage({ type: 'reset' });
       if(response.status) {
@@ -558,7 +565,7 @@ function Popup() {
 
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if(!tab.id) return;
+      if(!tab || !tab.id) return;
 
       // Inject content script
       await chrome.scripting.executeScript({
@@ -674,7 +681,9 @@ function Popup() {
   // --- Fill History Helpers (F-024) ---
 
   const formatTimeAgo = (timestamp: string): string => {
-    const diff = Date.now() - new Date(timestamp).getTime();
+    const time = new Date(timestamp).getTime();
+    if(isNaN(time)) return '';
+    const diff = Date.now() - time;
     const minutes = Math.floor(diff / 60000);
     if(minutes < 1) return 'just now';
     if(minutes < 60) return `${minutes}m ago`;
@@ -780,8 +789,8 @@ function Popup() {
               <div className="history-section">
                 <h2 className="section-title">Recent Fills</h2>
                 <div className="history-list">
-                  {fillHistory.slice(0, 5).map((entry, i) => (
-                    <div key={i} className="history-item">
+                  {fillHistory.slice(0, 5).map((entry) => (
+                    <div key={`${entry.timestamp}-${entry.domain}`} className="history-item">
                       <div className="history-domain">{entry.domain}</div>
                       <div className="history-meta">
                         <span>{entry.fieldsFilled}/{entry.fieldsTotal} fields</span>
