@@ -95,6 +95,28 @@ function classifyAPIError(error: any): { errorType: ErrorType, message: string }
   return { errorType: 'NETWORK', message: error?.message || 'Unknown error occurred' };
 }
 
+// --- LLM Call with Retry ---
+
+async function llmCreateWithRetry(
+  client: OpenAI,
+  params: { model: string; messages: { role: string; content: string }[] },
+  maxRetries = 2
+): Promise<any> {
+  for(let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await client.chat.completions.create(params as any);
+    } catch(error: any) {
+      const status = error?.status || error?.response?.status;
+      if(status === 429 && attempt < maxRetries) {
+        // Exponential backoff: 2s, 4s
+        await new Promise(r => setTimeout(r, 2000 * Math.pow(2, attempt)));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 // --- LLM Response Helper ---
 
 function extractLLMContent(response: any): string {
@@ -164,7 +186,7 @@ const askLLM = async (label: string) => {
     }
 
     const { client, model } = await getLLMClient();
-    const response = await client.chat.completions.create({
+    const response = await llmCreateWithRetry(client, {
       model,
       messages: [
         { role: 'system', content: system },
@@ -228,7 +250,7 @@ Return only the JSON object, no other text.`;
 
   try {
     const { client, model } = await getLLMClient();
-    const response = await client.chat.completions.create({
+    const response = await llmCreateWithRetry(client, {
       model,
       messages: [
         { role: 'system', content: 'You are a helpful assistant expert in filling job application forms. Return only valid JSON.' },
@@ -287,30 +309,50 @@ async function fillAllFields(fields: FieldRequest[]): Promise<FieldResult[]> {
 
 // --- Resume Parsing (F-014) ---
 
-async function parseResumeText(text: string): Promise<UserData> {
-  // Extract email and LinkedIn via regex first
+// Extract structured fields from resume text using regex (no LLM needed)
+function extractRegexFields(text: string) {
   const emailMatch = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/);
   const linkedinMatch = text.match(/linkedin\.com\/in\/[A-Za-z0-9_-]+/i);
+  const phoneMatch = text.match(/(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/);
 
+  return {
+    email: emailMatch?.[0] || '',
+    linkedinUrl: linkedinMatch ? `https://${linkedinMatch[0]}` : '',
+    phone: phoneMatch?.[0] || ''
+  };
+}
+
+// Truncate resume text to a reasonable size to avoid excessive token usage
+const MAX_RESUME_CHARS = 6000; // ~1500 tokens — more than enough for a 2-page resume
+
+function truncateResumeText(text: string): string {
+  // Normalize whitespace: collapse multiple spaces/newlines
+  const cleaned = text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  if(cleaned.length <= MAX_RESUME_CHARS) return cleaned;
+  return cleaned.slice(0, MAX_RESUME_CHARS) + '\n[truncated]';
+}
+
+async function parseResumeText(text: string): Promise<UserData> {
+  const regexFields = extractRegexFields(text);
+  const trimmed = truncateResumeText(text);
+
+  // The prompt asks LLM only for fields that genuinely need semantic understanding
   const prompt = `Parse the following resume text and extract structured information.
 Return ONLY a JSON object with these exact keys:
 - fullName: string (the person's full name)
-- email: string (email address)
-- phone: string (phone number)
 - location: string (city, state/country)
-- linkedinUrl: string (LinkedIn URL if found)
-- workExperience: string (work history with company names, titles, dates, descriptions)
+- workExperience: string (work history with company names, titles, dates, descriptions — be concise)
 - education: string (schools, degrees, dates)
 - skills: string (comma-separated list of skills)
 
 Resume text:
-${text}
+${trimmed}
 
-Return only the JSON object.`;
+Return only the JSON object, no explanation.`;
 
   try {
     const { client, model } = await getLLMClient();
-    const response = await client.chat.completions.create({
+    const response = await llmCreateWithRetry(client, {
       model,
       messages: [
         { role: 'system', content: 'You are an expert resume parser. Extract structured information and return valid JSON only.' },
@@ -327,10 +369,10 @@ Return only the JSON object.`;
 
     return {
       fullName: String(parsed.fullName || ''),
-      email: String(parsed.email || emailMatch?.[0] || ''),
-      phone: String(parsed.phone || ''),
+      email: regexFields.email || String(parsed.email || ''),
+      phone: regexFields.phone || String(parsed.phone || ''),
       location: String(parsed.location || ''),
-      linkedinUrl: String(parsed.linkedinUrl || (linkedinMatch ? `https://${linkedinMatch[0]}` : '')),
+      linkedinUrl: regexFields.linkedinUrl || String(parsed.linkedinUrl || ''),
       workExperience: String(parsed.workExperience || ''),
       education: String(parsed.education || ''),
       skills: String(parsed.skills || ''),
@@ -404,7 +446,7 @@ Generate the cover letter now.`;
 
   try {
     const { client, model } = await getLLMClient();
-    const response = await client.chat.completions.create({
+    const response = await llmCreateWithRetry(client, {
       model,
       messages: [
         { role: 'system', content: 'You are an expert career coach. Write professional, authentic cover letters that are tailored to specific roles. Be concise and impactful.' },
