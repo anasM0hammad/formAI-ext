@@ -13,6 +13,79 @@ interface FieldResult {
   confidence: 'direct' | 'llm' | 'failed';
 }
 
+// --- Site-Specific Form Templates (F-020) ---
+
+interface PlatformTemplate {
+  domains: string[];
+  fields: { selector: string; label: string }[];
+}
+
+const PLATFORM_TEMPLATES: PlatformTemplate[] = [
+  {
+    domains: ['myworkdayjobs.com', 'myworkday.com'],
+    fields: [
+      { selector: '[data-automation-id="legalNameSection_firstName"]', label: 'First Name' },
+      { selector: '[data-automation-id="legalNameSection_lastName"]', label: 'Last Name' },
+      { selector: '[data-automation-id="email"]', label: 'Email' },
+      { selector: '[data-automation-id="phone-number"]', label: 'Phone' },
+      { selector: '[data-automation-id="addressSection_addressLine1"]', label: 'Address' },
+      { selector: '[data-automation-id="addressSection_city"]', label: 'City' },
+      { selector: '[data-automation-id="addressSection_countryRegion"]', label: 'Country' },
+      { selector: '[data-automation-id="addressSection_postalCode"]', label: 'Zip Code' },
+    ]
+  },
+  {
+    domains: ['boards.greenhouse.io', 'job-boards.greenhouse.io'],
+    fields: [
+      { selector: '#first_name', label: 'First Name' },
+      { selector: '#last_name', label: 'Last Name' },
+      { selector: '#email', label: 'Email' },
+      { selector: '#phone', label: 'Phone' },
+      { selector: '#job_application_location', label: 'Location' },
+    ]
+  },
+  {
+    domains: ['jobs.lever.co'],
+    fields: [
+      { selector: 'input[name="name"]', label: 'Full Name' },
+      { selector: 'input[name="email"]', label: 'Email' },
+      { selector: 'input[name="phone"]', label: 'Phone' },
+      { selector: 'input[name="org"]', label: 'Current Company' },
+      { selector: 'input[name="urls[LinkedIn]"]', label: 'LinkedIn URL' },
+      { selector: 'textarea[name="comments"]', label: 'Additional Information' },
+    ]
+  },
+  {
+    domains: ['icims.com'],
+    fields: [
+      { selector: '#firstName', label: 'First Name' },
+      { selector: '#lastName', label: 'Last Name' },
+      { selector: '#email', label: 'Email' },
+      { selector: '#phone', label: 'Phone' },
+      { selector: '#city', label: 'City' },
+      { selector: '#state', label: 'State' },
+      { selector: '#zip', label: 'Zip Code' },
+    ]
+  },
+  {
+    domains: ['linkedin.com'],
+    fields: [
+      { selector: 'input[id*="firstName"]', label: 'First Name' },
+      { selector: 'input[id*="lastName"]', label: 'Last Name' },
+      { selector: 'input[id*="emailAddress"]', label: 'Email' },
+      { selector: 'input[id*="phoneNumber"]', label: 'Phone' },
+      { selector: 'input[id*="city"]', label: 'City' },
+    ]
+  }
+];
+
+function getTemplateForCurrentSite(): PlatformTemplate | null {
+  const hostname = window.location.hostname;
+  return PLATFORM_TEMPLATES.find(t =>
+    t.domains.some(d => hostname.includes(d))
+  ) || null;
+}
+
 // --- Label Detection (F-017) ---
 
 function findNearestLabel(inputElement: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): string | null {
@@ -80,6 +153,63 @@ function findNearestLabel(inputElement: HTMLInputElement | HTMLSelectElement | H
   // 9. Name attribute fallback
   const name = inputElement.getAttribute('name');
   if(name) return name.replace(/[_\-\[\]]/g, ' ').trim();
+
+  // 10. Smart Detection (F-022) - Infer from input type and id patterns
+  return smartFieldDetection(inputElement);
+}
+
+// --- Smart Field Detection (F-022) ---
+
+function smartFieldDetection(element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): string | null {
+  // Infer from input type
+  if(element instanceof HTMLInputElement) {
+    const typeMap: Record<string, string> = {
+      'email': 'Email',
+      'tel': 'Phone',
+      'url': 'URL',
+      'number': 'Number',
+      'date': 'Date',
+      'month': 'Month',
+    };
+    if(typeMap[element.type]) return typeMap[element.type];
+  }
+
+  // Infer from id patterns
+  const id = element.id?.toLowerCase() || '';
+  if(id) {
+    if(/email/.test(id)) return 'Email';
+    if(/phone|tel|mobile/.test(id)) return 'Phone';
+    if(/first.?name|fname/.test(id)) return 'First Name';
+    if(/last.?name|lname|surname/.test(id)) return 'Last Name';
+    if(/name/.test(id) && !/company|user/.test(id)) return 'Full Name';
+    if(/city/.test(id)) return 'City';
+    if(/state|province/.test(id)) return 'State';
+    if(/zip|postal/.test(id)) return 'Zip Code';
+    if(/country/.test(id)) return 'Country';
+    if(/address/.test(id)) return 'Address';
+    if(/linkedin/.test(id)) return 'LinkedIn URL';
+  }
+
+  // Infer from autocomplete attribute
+  const autocomplete = element.getAttribute('autocomplete')?.toLowerCase();
+  if(autocomplete) {
+    const acMap: Record<string, string> = {
+      'given-name': 'First Name',
+      'family-name': 'Last Name',
+      'name': 'Full Name',
+      'email': 'Email',
+      'tel': 'Phone',
+      'street-address': 'Address',
+      'address-line1': 'Address',
+      'address-level2': 'City',
+      'address-level1': 'State',
+      'postal-code': 'Zip Code',
+      'country-name': 'Country',
+      'organization': 'Company',
+      'url': 'Website URL',
+    };
+    if(acMap[autocomplete]) return acMap[autocomplete];
+  }
 
   return null;
 }
@@ -522,12 +652,28 @@ function escapeHtml(text: string): string {
 
 function scanFormFields(): { element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, label: string, id: string }[] {
   const fields: { element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, label: string, id: string }[] = [];
+  let index = 0;
+
+  // F-020: Check for site-specific template first
+  const template = getTemplateForCurrentSite();
+  if(template) {
+    for(const tmplField of template.fields) {
+      const el = document.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(tmplField.selector);
+      if(el && !el.disabled) {
+        const fieldId = `field_${index++}`;
+        el.dataset.formaiId = fieldId;
+        fields.push({ element: el, label: tmplField.label, id: fieldId });
+      }
+    }
+  }
+
+  // Generic scan for all remaining fields not already captured by template
   const selectors = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]):not([type="image"]), select, textarea';
   const elements = document.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(selectors);
+  const capturedElements = new Set(fields.map(f => f.element));
 
-  let index = 0;
   elements.forEach(el => {
-    // Skip invisible or disabled elements
+    if(capturedElements.has(el)) return;
     if(el.disabled || ('readOnly' in el && el.readOnly)) return;
     const style = window.getComputedStyle(el);
     if(style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return;
@@ -602,6 +748,18 @@ async function handleFillAll(): Promise<void> {
     }
 
     updateFloatingPanel(panelItems);
+
+    // F-024: Save fill history
+    const filledCount = results.filter(r => r.value && r.confidence !== 'failed').length;
+    chrome.runtime.sendMessage({
+      type: 'saveFillHistory',
+      data: {
+        domain: window.location.hostname,
+        url: window.location.href,
+        fieldsTotal: fields.length,
+        fieldsFilled: filledCount
+      }
+    });
 
     // Enter picker mode for individual corrections
     startElementPicker();

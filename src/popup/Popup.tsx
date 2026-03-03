@@ -7,6 +7,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('pdf.worker.min.m
 
 const MAIN_TAB = 'General';
 const DATA_TAB = 'Data';
+const COVER_LETTER = 'Letter';
 const CONFIG = 'Settings';
 
 const OLLAMA = 'Ollama';
@@ -25,6 +26,14 @@ interface UserData {
   education: string;
   skills: string;
   additionalInfo: string;
+}
+
+interface FillHistoryEntry {
+  domain: string;
+  url: string;
+  timestamp: string;
+  fieldsTotal: number;
+  fieldsFilled: number;
 }
 
 const emptyUserData: UserData = {
@@ -292,6 +301,17 @@ function Popup() {
   });
   const [isImporting, setIsImporting] = useState(false);
 
+  // F-024: Fill history
+  const [fillHistory, setFillHistory] = useState<FillHistoryEntry[]>([]);
+
+  // F-023: Cover letter
+  const [jobDescription, setJobDescription] = useState('');
+  const [coverLetter, setCoverLetter] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  // F-025: Data import
+  const importFileRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     // Check onboarding state
     chrome.storage.sync.get(['theme', 'onboardingComplete'], (result) => {
@@ -299,12 +319,13 @@ function Popup() {
       setOnboardingComplete(result.onboardingComplete === true);
     });
 
-    chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'picker', 'userData'], async (result) => {
+    chrome.storage.local.get(['provider', 'apiKey', 'model', 'url', 'picker', 'userData', 'fillHistory'], async (result) => {
       if(result.provider) setProvider(result.provider);
       if(result.picker !== undefined) setPicker(result.picker);
       if(result.model) setModel(result.model);
       if(result.url) setUrl(result.url);
       if(result.userData) setUserData(result.userData);
+      if(result.fillHistory) setFillHistory(result.fillHistory);
 
       if(result.apiKey) {
         try {
@@ -559,6 +580,112 @@ function Popup() {
     }
   }
 
+  // --- Cover Letter Generation (F-023) ---
+
+  const handleGenerateCoverLetter = async () => {
+    if(!jobDescription.trim()) {
+      toast.error('Please paste a job description first.');
+      return;
+    }
+    setIsGenerating(true);
+    setCoverLetter('');
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'generateCoverLetter',
+        data: { jobDescription: jobDescription.trim() }
+      });
+      if(response.status) {
+        setCoverLetter(response.coverLetter);
+        toast.success('Cover letter generated!');
+      } else {
+        toast.error(response.error || 'Failed to generate cover letter');
+      }
+    } catch(error: any) {
+      toast.error(error.message || 'Failed to generate cover letter');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const copyCoverLetter = () => {
+    navigator.clipboard.writeText(coverLetter).then(() => {
+      toast.success('Copied to clipboard!');
+    }).catch(() => {
+      toast.error('Failed to copy');
+    });
+  };
+
+  // --- Data Export/Import (F-025) ---
+
+  const handleExportData = async () => {
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'exportData' });
+      if(response.status) {
+        const blob = new Blob([JSON.stringify(response.data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `formai-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast.success('Data exported successfully');
+      } else {
+        toast.error(response.error || 'Export failed');
+      }
+    } catch(error: any) {
+      toast.error(error.message || 'Export failed');
+    }
+  };
+
+  const handleImportData = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if(!file) return;
+
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+
+      if(!data.version) {
+        toast.error('Invalid backup file format');
+        return;
+      }
+
+      const response = await chrome.runtime.sendMessage({ type: 'importData', data });
+      if(response.status) {
+        toast.success('Data imported! Reloading...');
+        // Reload state
+        chrome.storage.local.get(['userData', 'fillHistory', 'provider', 'model', 'url'], (result) => {
+          if(result.userData) setUserData(result.userData);
+          if(result.fillHistory) setFillHistory(result.fillHistory);
+          if(result.provider) setProvider(result.provider);
+          if(result.model) setModel(result.model);
+          if(result.url) setUrl(result.url);
+        });
+      } else {
+        toast.error(response.error || 'Import failed');
+      }
+    } catch {
+      toast.error('Invalid JSON file');
+    } finally {
+      if(importFileRef.current) importFileRef.current.value = '';
+    }
+  };
+
+  // --- Fill History Helpers (F-024) ---
+
+  const formatTimeAgo = (timestamp: string): string => {
+    const diff = Date.now() - new Date(timestamp).getTime();
+    const minutes = Math.floor(diff / 60000);
+    if(minutes < 1) return 'just now';
+    if(minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if(hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if(days < 7) return `${days}d ago`;
+    const weeks = Math.floor(days / 7);
+    return `${weeks}w ago`;
+  };
+
   return (
     <div className={`popup-container ${theme}`}>
       {notificationId && notification && <Notification message={notification} type={notificationType} />}
@@ -592,6 +719,9 @@ function Popup() {
         </button>
         <button className={`tab ${activeTab === DATA_TAB ? 'active' : ''}`} onClick={() => setActiveTab(DATA_TAB)}>
           {DATA_TAB}
+        </button>
+        <button className={`tab ${activeTab === COVER_LETTER ? 'active' : ''}`} onClick={() => setActiveTab(COVER_LETTER)}>
+          {COVER_LETTER}
         </button>
         <button className={`tab ${activeTab === CONFIG ? 'active' : ''}`} onClick={() => setActiveTab(CONFIG)}>
           {CONFIG}
@@ -645,6 +775,24 @@ function Popup() {
                 </div>
               )}
             </div>
+            {/* Fill History (F-024) */}
+            {fillHistory.length > 0 && (
+              <div className="history-section">
+                <h2 className="section-title">Recent Fills</h2>
+                <div className="history-list">
+                  {fillHistory.slice(0, 5).map((entry, i) => (
+                    <div key={i} className="history-item">
+                      <div className="history-domain">{entry.domain}</div>
+                      <div className="history-meta">
+                        <span>{entry.fieldsFilled}/{entry.fieldsTotal} fields</span>
+                        <span className="history-time">{formatTimeAgo(entry.timestamp)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="form-group">
               <button className='button' onClick={onFillForm}>
                 {picker ? 'Stop' : 'Fill This Page'}
@@ -759,6 +907,64 @@ function Popup() {
             <div className="data-actions">
               <button className="button-inline" onClick={saveUserData}>Save Data</button>
               <button className="button-reset-inline" onClick={resetAllData}>Reset All</button>
+            </div>
+
+            {/* Data Export/Import (F-025) */}
+            <div className="export-import-section">
+              <h2 className="section-title">Backup & Restore</h2>
+              <div className="export-import-actions">
+                <button className="button-secondary" onClick={handleExportData}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  Export
+                </button>
+                <input type="file" accept=".json" ref={importFileRef} style={{ display: 'none' }}
+                  onChange={handleImportData} />
+                <button className="button-secondary" onClick={() => importFileRef.current?.click()}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                  </svg>
+                  Import
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Cover Letter Tab (F-023) */}
+        {activeTab === COVER_LETTER && (
+          <>
+            <div className="cover-letter-section">
+              <div className="form-group">
+                <label>Job Description</label>
+                <textarea className="form-control" rows={5} value={jobDescription}
+                  placeholder="Paste the job description here..."
+                  onChange={e => setJobDescription(e.target.value)} />
+              </div>
+              <button className="button-primary cover-letter-btn" onClick={handleGenerateCoverLetter}
+                disabled={isGenerating || !jobDescription.trim()}>
+                {isGenerating ? 'Generating...' : 'Generate Cover Letter'}
+              </button>
+
+              {coverLetter && (
+                <div className="cover-letter-output">
+                  <div className="cover-letter-header">
+                    <span>Generated Cover Letter</span>
+                    <button className="copy-btn" onClick={copyCoverLetter} title="Copy to clipboard">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="cover-letter-text">{coverLetter}</div>
+                </div>
+              )}
             </div>
           </>
         )}
