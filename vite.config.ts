@@ -15,6 +15,10 @@ export default defineConfig({
         {
           src: 'public/icons',
           dest: '.'
+        },
+        {
+          src: 'node_modules/pdfjs-dist/build/pdf.worker.min.mjs',
+          dest: '.'
         }
       ]
     })
